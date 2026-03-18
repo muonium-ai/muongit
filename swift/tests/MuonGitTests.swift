@@ -974,4 +974,129 @@ final class MuonGitTests: XCTestCase {
         XCTAssertEqual(deltas[2].status, .added)
         XCTAssertEqual(deltas[2].path, "d.txt")
     }
+
+    // MARK: - Status Tests
+
+    private func makeIndexEntry(path: String, oid: OID, fileSize: UInt32) -> IndexEntry {
+        IndexEntry(mode: 0o100644, fileSize: fileSize, oid: oid, path: path)
+    }
+
+    func testStatusCleanWorkdir() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_status_clean"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let content = Array("hello\n".utf8)
+        let filePath = (repo.workdir! as NSString).appendingPathComponent("hello.txt")
+        try Data(content).write(to: URL(fileURLWithPath: filePath))
+
+        let oid = OID.hash(type: .blob, data: content)
+        var index = Index()
+        index.add(makeIndexEntry(path: "hello.txt", oid: oid, fileSize: UInt32(content.count)))
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        let status = try workdirStatus(gitDir: repo.gitDir, workdir: repo.workdir!)
+        XCTAssertTrue(status.isEmpty)
+    }
+
+    func testStatusModifiedFile() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_status_modified"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let content = Array("hello\n".utf8)
+        let filePath = (repo.workdir! as NSString).appendingPathComponent("hello.txt")
+        try Data(content).write(to: URL(fileURLWithPath: filePath))
+
+        let oid = OID.hash(type: .blob, data: content)
+        var index = Index()
+        index.add(makeIndexEntry(path: "hello.txt", oid: oid, fileSize: UInt32(content.count)))
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        // Modify the file
+        try Data("changed\n".utf8).write(to: URL(fileURLWithPath: filePath))
+
+        let status = try workdirStatus(gitDir: repo.gitDir, workdir: repo.workdir!)
+        XCTAssertEqual(status.count, 1)
+        XCTAssertEqual(status[0].path, "hello.txt")
+        XCTAssertEqual(status[0].status, .modified)
+    }
+
+    func testStatusDeletedFile() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_status_deleted"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let content = Array("hello\n".utf8)
+        let oid = OID.hash(type: .blob, data: content)
+        var index = Index()
+        index.add(makeIndexEntry(path: "hello.txt", oid: oid, fileSize: UInt32(content.count)))
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        // Don't create the file
+        let status = try workdirStatus(gitDir: repo.gitDir, workdir: repo.workdir!)
+        XCTAssertEqual(status.count, 1)
+        XCTAssertEqual(status[0].path, "hello.txt")
+        XCTAssertEqual(status[0].status, .deleted)
+    }
+
+    func testStatusNewFile() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_status_new"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let index = Index()
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        let filePath = (repo.workdir! as NSString).appendingPathComponent("new.txt")
+        try Data("new\n".utf8).write(to: URL(fileURLWithPath: filePath))
+
+        let status = try workdirStatus(gitDir: repo.gitDir, workdir: repo.workdir!)
+        XCTAssertEqual(status.count, 1)
+        XCTAssertEqual(status[0].path, "new.txt")
+        XCTAssertEqual(status[0].status, .new)
+    }
+
+    func testStatusMixed() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_status_mixed"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let contentA = Array("aaa\n".utf8)
+        let contentB = Array("bbb\n".utf8)
+        let oidA = OID.hash(type: .blob, data: contentA)
+        let oidB = OID.hash(type: .blob, data: contentB)
+
+        var index = Index()
+        index.add(makeIndexEntry(path: "a.txt", oid: oidA, fileSize: UInt32(contentA.count)))
+        index.add(makeIndexEntry(path: "b.txt", oid: oidB, fileSize: UInt32(contentB.count)))
+        index.add(makeIndexEntry(path: "c.txt", oid: oidA, fileSize: UInt32(contentA.count)))
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        // a.txt: unchanged
+        try Data(contentA).write(to: URL(fileURLWithPath: (repo.workdir! as NSString).appendingPathComponent("a.txt")))
+        // b.txt: modified
+        try Data("modified\n".utf8).write(to: URL(fileURLWithPath: (repo.workdir! as NSString).appendingPathComponent("b.txt")))
+        // c.txt: deleted (not created)
+        // d.txt: new
+        try Data("new\n".utf8).write(to: URL(fileURLWithPath: (repo.workdir! as NSString).appendingPathComponent("d.txt")))
+
+        let status = try workdirStatus(gitDir: repo.gitDir, workdir: repo.workdir!)
+
+        let modified = status.filter { $0.status == .modified }
+        let deleted = status.filter { $0.status == .deleted }
+        let new = status.filter { $0.status == .new }
+
+        XCTAssertEqual(modified.count, 1)
+        XCTAssertEqual(modified[0].path, "b.txt")
+        XCTAssertEqual(deleted.count, 1)
+        XCTAssertEqual(deleted[0].path, "c.txt")
+        XCTAssertEqual(new.count, 1)
+        XCTAssertEqual(new[0].path, "d.txt")
+    }
 }
