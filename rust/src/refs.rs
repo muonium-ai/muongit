@@ -137,6 +137,61 @@ fn collect_loose_refs(
     Ok(())
 }
 
+/// Write (create or update) a direct reference pointing to an OID.
+/// Creates intermediate directories as needed.
+pub fn write_reference(git_dir: &Path, name: &str, oid: &OID) -> Result<(), MuonGitError> {
+    let ref_path = git_dir.join(name);
+    if let Some(parent) = ref_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&ref_path, format!("{}\n", oid.hex()))?;
+    Ok(())
+}
+
+/// Write (create or update) a symbolic reference.
+pub fn write_symbolic_reference(git_dir: &Path, name: &str, target: &str) -> Result<(), MuonGitError> {
+    let ref_path = git_dir.join(name);
+    if let Some(parent) = ref_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&ref_path, format!("ref: {}\n", target))?;
+    Ok(())
+}
+
+/// Delete a loose reference file. Returns true if it existed and was deleted.
+pub fn delete_reference(git_dir: &Path, name: &str) -> Result<bool, MuonGitError> {
+    let ref_path = git_dir.join(name);
+    if ref_path.exists() {
+        fs::remove_file(&ref_path)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Update a reference only if its current value matches `old_oid` (compare-and-swap).
+/// Pass `OID::zero()` for `old_oid` to require that the ref does not yet exist (create-only).
+pub fn update_reference(git_dir: &Path, name: &str, new_oid: &OID, old_oid: &OID) -> Result<(), MuonGitError> {
+    let ref_path = git_dir.join(name);
+
+    if old_oid.is_zero() {
+        if ref_path.exists() {
+            return Err(MuonGitError::Conflict(format!(
+                "reference '{}' already exists", name
+            )));
+        }
+    } else {
+        let current = read_reference(git_dir, name)?;
+        if current != old_oid.hex() {
+            return Err(MuonGitError::Conflict(format!(
+                "reference '{}' expected {}, got {}", name, old_oid.hex(), current
+            )));
+        }
+    }
+
+    write_reference(git_dir, name, new_oid)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,6 +337,92 @@ mod tests {
                 assert_eq!(value, "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d");
             }
         }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_write_and_read_reference() {
+        let tmp = std::env::temp_dir().join("muongit_test_ref_write");
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let repo = Repository::init(tmp.to_string_lossy().into_owned(), false).unwrap();
+        let oid = OID::from_hex("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d").unwrap();
+        write_reference(repo.git_dir(), "refs/heads/feature", &oid).unwrap();
+
+        let value = read_reference(repo.git_dir(), "refs/heads/feature").unwrap();
+        assert_eq!(value, oid.hex());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_write_symbolic_reference() {
+        let tmp = std::env::temp_dir().join("muongit_test_ref_sym");
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let repo = Repository::init(tmp.to_string_lossy().into_owned(), false).unwrap();
+        write_symbolic_reference(repo.git_dir(), "refs/heads/alias", "refs/heads/main").unwrap();
+
+        let value = read_reference(repo.git_dir(), "refs/heads/alias").unwrap();
+        assert_eq!(value, "ref: refs/heads/main");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_delete_reference() {
+        let tmp = std::env::temp_dir().join("muongit_test_ref_delete");
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let repo = Repository::init(tmp.to_string_lossy().into_owned(), false).unwrap();
+        let oid = OID::from_hex("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d").unwrap();
+        write_reference(repo.git_dir(), "refs/heads/feature", &oid).unwrap();
+
+        assert!(delete_reference(repo.git_dir(), "refs/heads/feature").unwrap());
+        assert!(read_reference(repo.git_dir(), "refs/heads/feature").is_err());
+        assert!(!delete_reference(repo.git_dir(), "refs/heads/nonexistent").unwrap());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_update_reference_success() {
+        let tmp = std::env::temp_dir().join("muongit_test_ref_update");
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let repo = Repository::init(tmp.to_string_lossy().into_owned(), false).unwrap();
+        let oid1 = OID::from_hex("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d").unwrap();
+        let oid2 = OID::from_hex("bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d").unwrap();
+
+        // Create with zero old
+        update_reference(repo.git_dir(), "refs/heads/feature", &oid1, &OID::zero()).unwrap();
+        assert_eq!(read_reference(repo.git_dir(), "refs/heads/feature").unwrap(), oid1.hex());
+
+        // Update with matching old
+        update_reference(repo.git_dir(), "refs/heads/feature", &oid2, &oid1).unwrap();
+        assert_eq!(read_reference(repo.git_dir(), "refs/heads/feature").unwrap(), oid2.hex());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_update_reference_conflict() {
+        let tmp = std::env::temp_dir().join("muongit_test_ref_cas");
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let repo = Repository::init(tmp.to_string_lossy().into_owned(), false).unwrap();
+        let oid1 = OID::from_hex("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d").unwrap();
+        let oid2 = OID::from_hex("bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d").unwrap();
+        let oid_wrong = OID::from_hex("ccf4c61ddcc5e8a2dabede0f3b482cd9aea9434d").unwrap();
+
+        write_reference(repo.git_dir(), "refs/heads/feature", &oid1).unwrap();
+
+        // Wrong old value should fail
+        assert!(update_reference(repo.git_dir(), "refs/heads/feature", &oid2, &oid_wrong).is_err());
+
+        // Create-only should fail if exists
+        assert!(update_reference(repo.git_dir(), "refs/heads/feature", &oid2, &OID::zero()).is_err());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

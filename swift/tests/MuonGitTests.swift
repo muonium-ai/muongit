@@ -551,4 +551,86 @@ final class MuonGitTests: XCTestCase {
         XCTAssertEqual(tag.tagName, "v1.0")
         XCTAssertEqual(tag.targetId, targetId)
     }
+
+    // MARK: - Ref Write/Update/Delete Tests
+
+    func testWriteAndReadReference() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_ref_write"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        try writeReference(gitDir: repo.gitDir, name: "refs/heads/feature", oid: oid)
+
+        let value = try readReference(gitDir: repo.gitDir, name: "refs/heads/feature")
+        XCTAssertEqual(value, oid.hex)
+    }
+
+    func testWriteSymbolicReference() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_ref_sym"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        try writeSymbolicReference(gitDir: repo.gitDir, name: "refs/heads/alias", target: "refs/heads/main")
+
+        let value = try readReference(gitDir: repo.gitDir, name: "refs/heads/alias")
+        XCTAssertEqual(value, "ref: refs/heads/main")
+    }
+
+    func testDeleteReference() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_ref_delete"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        try writeReference(gitDir: repo.gitDir, name: "refs/heads/feature", oid: oid)
+
+        let deleted = try deleteReference(gitDir: repo.gitDir, name: "refs/heads/feature")
+        XCTAssertTrue(deleted)
+
+        XCTAssertThrowsError(try readReference(gitDir: repo.gitDir, name: "refs/heads/feature"))
+
+        let notDeleted = try deleteReference(gitDir: repo.gitDir, name: "refs/heads/nonexistent")
+        XCTAssertFalse(notDeleted)
+    }
+
+    func testUpdateReferenceSuccess() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_ref_update"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let oid1 = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let oid2 = OID(hex: "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+        // Create with zero old
+        try updateReference(gitDir: repo.gitDir, name: "refs/heads/feature", newOid: oid1, oldOid: OID.zero)
+        XCTAssertEqual(try readReference(gitDir: repo.gitDir, name: "refs/heads/feature"), oid1.hex)
+
+        // Update with matching old
+        try updateReference(gitDir: repo.gitDir, name: "refs/heads/feature", newOid: oid2, oldOid: oid1)
+        XCTAssertEqual(try readReference(gitDir: repo.gitDir, name: "refs/heads/feature"), oid2.hex)
+    }
+
+    func testUpdateReferenceConflict() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_ref_cas"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let oid1 = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let oid2 = OID(hex: "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let oidWrong = OID(hex: "ccf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+        try writeReference(gitDir: repo.gitDir, name: "refs/heads/feature", oid: oid1)
+
+        // Wrong old value should fail
+        XCTAssertThrowsError(try updateReference(gitDir: repo.gitDir, name: "refs/heads/feature", newOid: oid2, oldOid: oidWrong))
+
+        // Create-only should fail if exists
+        XCTAssertThrowsError(try updateReference(gitDir: repo.gitDir, name: "refs/heads/feature", newOid: oid2, oldOid: OID.zero))
+    }
 }

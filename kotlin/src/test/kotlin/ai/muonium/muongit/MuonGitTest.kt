@@ -633,4 +633,98 @@ class MuonGitTest {
             tmp.deleteRecursively()
         }
     }
+
+    // Ref Write/Update/Delete Tests
+
+    @Test
+    fun testWriteAndReadReference() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_ref_write")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            writeReference(repo.gitDir, "refs/heads/feature", oid)
+
+            val value = readReference(repo.gitDir, "refs/heads/feature")
+            assertEquals(oid.hex, value)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testWriteSymbolicReference() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_ref_sym")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            writeSymbolicReference(repo.gitDir, "refs/heads/alias", "refs/heads/main")
+
+            val value = readReference(repo.gitDir, "refs/heads/alias")
+            assertEquals("ref: refs/heads/main", value)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testDeleteReference() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_ref_delete")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            writeReference(repo.gitDir, "refs/heads/feature", oid)
+
+            assertTrue(deleteReference(repo.gitDir, "refs/heads/feature"))
+            assertFailsWith<MuonGitException.NotFound> {
+                readReference(repo.gitDir, "refs/heads/feature")
+            }
+            assertTrue(!deleteReference(repo.gitDir, "refs/heads/nonexistent"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testUpdateReferenceSuccess() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_ref_update")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val oid1 = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            val oid2 = OID("bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+            updateReference(repo.gitDir, "refs/heads/feature", oid1, OID.ZERO)
+            assertEquals(oid1.hex, readReference(repo.gitDir, "refs/heads/feature"))
+
+            updateReference(repo.gitDir, "refs/heads/feature", oid2, oid1)
+            assertEquals(oid2.hex, readReference(repo.gitDir, "refs/heads/feature"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testUpdateReferenceConflict() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_ref_cas")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val oid1 = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            val oid2 = OID("bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            val oidWrong = OID("ccf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+            writeReference(repo.gitDir, "refs/heads/feature", oid1)
+
+            assertFailsWith<MuonGitException.Conflict> {
+                updateReference(repo.gitDir, "refs/heads/feature", oid2, oidWrong)
+            }
+            assertFailsWith<MuonGitException.Conflict> {
+                updateReference(repo.gitDir, "refs/heads/feature", oid2, OID.ZERO)
+            }
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
 }

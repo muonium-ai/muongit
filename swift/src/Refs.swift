@@ -111,3 +111,59 @@ public func listReferences(gitDir: String) throws -> [(String, String)] {
 
     return refs.map { ($0.key, $0.value) }.sorted { $0.0 < $1.0 }
 }
+
+// MARK: - Write Reference
+
+/// Write (create or update) a direct reference pointing to an OID.
+/// Creates intermediate directories as needed.
+public func writeReference(gitDir: String, name: String, oid: OID) throws {
+    let refPath = (gitDir as NSString).appendingPathComponent(name)
+    let parentDir = (refPath as NSString).deletingLastPathComponent
+    try FileManager.default.createDirectory(atPath: parentDir, withIntermediateDirectories: true)
+    try "\(oid.hex)\n".write(toFile: refPath, atomically: true, encoding: .utf8)
+}
+
+/// Write (create or update) a symbolic reference.
+public func writeSymbolicReference(gitDir: String, name: String, target: String) throws {
+    let refPath = (gitDir as NSString).appendingPathComponent(name)
+    let parentDir = (refPath as NSString).deletingLastPathComponent
+    try FileManager.default.createDirectory(atPath: parentDir, withIntermediateDirectories: true)
+    try "ref: \(target)\n".write(toFile: refPath, atomically: true, encoding: .utf8)
+}
+
+// MARK: - Delete Reference
+
+/// Delete a loose reference file. Returns true if it existed and was deleted.
+@discardableResult
+public func deleteReference(gitDir: String, name: String) throws -> Bool {
+    let refPath = (gitDir as NSString).appendingPathComponent(name)
+    if FileManager.default.fileExists(atPath: refPath) {
+        try FileManager.default.removeItem(atPath: refPath)
+        return true
+    }
+    return false
+}
+
+// MARK: - Update Reference (compare-and-swap)
+
+/// Update a reference only if its current value matches `oldOid`.
+/// This is the atomic compare-and-swap primitive for refs.
+/// Pass `OID.zero` for `oldOid` to require that the ref does not yet exist (create-only).
+public func updateReference(gitDir: String, name: String, newOid: OID, oldOid: OID) throws {
+    let refPath = (gitDir as NSString).appendingPathComponent(name)
+
+    if oldOid.isZero {
+        // Create-only: ref must not exist
+        if FileManager.default.fileExists(atPath: refPath) {
+            throw MuonGitError.conflict("reference '\(name)' already exists")
+        }
+    } else {
+        // Must match current value
+        let current = try readReference(gitDir: gitDir, name: name)
+        guard current == oldOid.hex else {
+            throw MuonGitError.conflict("reference '\(name)' expected \(oldOid.hex), got \(current)")
+        }
+    }
+
+    try writeReference(gitDir: gitDir, name: name, oid: newOid)
+}

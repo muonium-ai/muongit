@@ -125,3 +125,55 @@ private fun collectLooseRefs(dir: File, prefix: String, result: MutableMap<Strin
         }
     }
 }
+
+/**
+ * Write (create or update) a direct reference pointing to an OID.
+ * Creates intermediate directories as needed.
+ */
+fun writeReference(gitDir: File, name: String, oid: OID) {
+    val refFile = File(gitDir, name)
+    refFile.parentFile?.mkdirs()
+    refFile.writeText("${oid.hex}\n")
+}
+
+/**
+ * Write (create or update) a symbolic reference.
+ */
+fun writeSymbolicReference(gitDir: File, name: String, target: String) {
+    val refFile = File(gitDir, name)
+    refFile.parentFile?.mkdirs()
+    refFile.writeText("ref: $target\n")
+}
+
+/**
+ * Delete a loose reference file. Returns true if it existed and was deleted.
+ */
+fun deleteReference(gitDir: File, name: String): Boolean {
+    val refFile = File(gitDir, name)
+    return if (refFile.exists()) {
+        refFile.delete()
+    } else {
+        false
+    }
+}
+
+/**
+ * Update a reference only if its current value matches [oldOid] (compare-and-swap).
+ * Pass OID.ZERO for [oldOid] to require that the ref does not yet exist (create-only).
+ */
+fun updateReference(gitDir: File, name: String, newOid: OID, oldOid: OID) {
+    val refFile = File(gitDir, name)
+
+    if (oldOid.isZero) {
+        if (refFile.exists()) {
+            throw MuonGitException.Conflict("reference '$name' already exists")
+        }
+    } else {
+        val current = readReference(gitDir, name)
+        if (current != oldOid.hex) {
+            throw MuonGitException.Conflict("reference '$name' expected ${oldOid.hex}, got $current")
+        }
+    }
+
+    writeReference(gitDir, name, newOid)
+}
