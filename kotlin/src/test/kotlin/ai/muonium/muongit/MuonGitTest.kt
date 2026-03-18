@@ -69,4 +69,66 @@ class MuonGitTest {
         assertTrue(z.isZero)
         assertEquals("0000000000000000000000000000000000000000", z.hex)
     }
+
+    // Repository Tests
+
+    @Test
+    fun testInitAndOpen() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_init")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            assertEquals(false, repo.isBare)
+            assertTrue(repo.workdir != null)
+            assertTrue(repo.isHeadUnborn)
+
+            val repo2 = Repository.open(tmp.path)
+            assertEquals(false, repo2.isBare)
+            assertEquals("ref: refs/heads/main", repo2.head())
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testInitBare() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_bare")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path, bare = true)
+            assertTrue(repo.isBare)
+            assertTrue(repo.workdir == null)
+
+            val repo2 = Repository.open(tmp.path)
+            assertTrue(repo2.isBare)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testOpenNonexistent() {
+        try {
+            Repository.open("/tmp/muongit_does_not_exist_12345")
+            assertTrue(false, "should have thrown")
+        } catch (_: MuonGitException.NotFound) {
+            // expected
+        }
+    }
+
+    @Test
+    fun testDiscover() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_discover")
+        tmp.deleteRecursively()
+        try {
+            Repository.init(tmp.path)
+            val subdir = java.io.File(tmp, "a/b/c")
+            subdir.mkdirs()
+
+            val found = Repository.discover(subdir.path)
+            assertEquals(false, found.isBare)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
 }

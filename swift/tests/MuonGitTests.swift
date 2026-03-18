@@ -57,4 +57,51 @@ final class MuonGitTests: XCTestCase {
         XCTAssertTrue(z.isZero)
         XCTAssertEqual(z.hex, "0000000000000000000000000000000000000000")
     }
+
+    // MARK: - Repository Tests
+
+    func testInitAndOpen() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_init"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        XCTAssertFalse(repo.isBare)
+        XCTAssertNotNil(repo.workdir)
+        XCTAssertTrue(repo.isHeadUnborn)
+
+        let repo2 = try Repository.open(at: tmp)
+        XCTAssertFalse(repo2.isBare)
+        XCTAssertEqual(try repo2.head(), "ref: refs/heads/main")
+    }
+
+    func testInitBare() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_bare"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp, bare: true)
+        XCTAssertTrue(repo.isBare)
+        XCTAssertNil(repo.workdir)
+
+        let repo2 = try Repository.open(at: tmp)
+        XCTAssertTrue(repo2.isBare)
+    }
+
+    func testOpenNonexistent() {
+        XCTAssertThrowsError(try Repository.open(at: "/tmp/muongit_does_not_exist_12345"))
+    }
+
+    func testDiscover() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_discover"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let _ = try Repository.create(at: tmp)
+        let subdir = (tmp as NSString).appendingPathComponent("a/b/c")
+        try FileManager.default.createDirectory(atPath: subdir, withIntermediateDirectories: true)
+
+        let found = try Repository.discover(at: subdir)
+        XCTAssertFalse(found.isBare)
+    }
 }

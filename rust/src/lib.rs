@@ -5,10 +5,12 @@ pub mod oid;
 pub mod types;
 pub mod error;
 pub mod sha1;
+pub mod repository;
 
 pub use oid::OID;
 pub use types::{ObjectType, Signature};
 pub use error::MuonGitError;
+pub use repository::Repository;
 
 /// Library version information
 pub mod version {
