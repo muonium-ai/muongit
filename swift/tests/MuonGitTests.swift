@@ -434,4 +434,61 @@ final class MuonGitTests: XCTestCase {
         XCTAssertEqual(tree.entries.count, 1)
         XCTAssertEqual(tree.entries[0].name, "file.txt")
     }
+
+    // MARK: - Blob Tests
+
+    func testHashBlob() {
+        let oid = hashBlob(data: Data("hello\n".utf8))
+        XCTAssertEqual(oid.hex, "ce013625030ba8dba906f756967f9e9ca394464a")
+    }
+
+    func testHashBlobEmpty() {
+        let oid = hashBlob(data: Data())
+        XCTAssertEqual(oid.hex, "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391")
+    }
+
+    func testWriteAndReadBlob() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_blob_rw"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let content = Data("blob content\n".utf8)
+        let oid = try writeBlob(gitDir: repo.gitDir, data: content)
+        let blob = try readBlob(gitDir: repo.gitDir, oid: oid)
+
+        XCTAssertEqual(blob.data, content)
+        XCTAssertEqual(blob.size, content.count)
+        XCTAssertEqual(blob.oid, oid)
+    }
+
+    func testWriteBlobFromFile() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_blob_file"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let workdir = repo.workdir!
+        let filePath = (workdir as NSString).appendingPathComponent("test.txt")
+        try "file content\n".write(toFile: filePath, atomically: true, encoding: .utf8)
+
+        let oid = try writeBlobFromFile(gitDir: repo.gitDir, path: filePath)
+        let expected = hashBlob(data: Data("file content\n".utf8))
+        XCTAssertEqual(oid, expected)
+
+        let blob = try readBlob(gitDir: repo.gitDir, oid: oid)
+        XCTAssertEqual(String(data: blob.data, encoding: .utf8), "file content\n")
+    }
+
+    func testReadNonBlobTypeErrors() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_blob_type_err"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let commitData = Data("tree 0000000000000000000000000000000000000000\nauthor T <t@t> 0 +0000\ncommitter T <t@t> 0 +0000\n\nm\n".utf8)
+        let oid = try writeLooseObject(gitDir: repo.gitDir, type: .commit, data: commitData)
+
+        XCTAssertThrowsError(try readBlob(gitDir: repo.gitDir, oid: oid))
+    }
 }

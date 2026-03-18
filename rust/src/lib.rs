@@ -10,6 +10,7 @@ pub mod odb;
 pub mod refs;
 pub mod commit;
 pub mod tree;
+pub mod blob;
 
 pub use oid::OID;
 pub use types::{ObjectType, Signature};

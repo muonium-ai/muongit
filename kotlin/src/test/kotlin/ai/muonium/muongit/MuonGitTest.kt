@@ -495,4 +495,73 @@ class MuonGitTest {
             tmp.deleteRecursively()
         }
     }
+
+    // Blob Tests
+
+    @Test
+    fun testHashBlob() {
+        val oid = hashBlob("hello\n".toByteArray())
+        assertEquals("ce013625030ba8dba906f756967f9e9ca394464a", oid.hex)
+    }
+
+    @Test
+    fun testHashBlobEmpty() {
+        val oid = hashBlob(byteArrayOf())
+        assertEquals("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391", oid.hex)
+    }
+
+    @Test
+    fun testWriteAndReadBlob() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_blob_rw")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val content = "blob content\n".toByteArray()
+            val oid = writeBlob(repo.gitDir, content)
+            val blob = readBlob(repo.gitDir, oid)
+
+            assertTrue(blob.data.contentEquals(content))
+            assertEquals(content.size, blob.size)
+            assertEquals(oid, blob.oid)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testWriteBlobFromFile() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_blob_file")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val filePath = java.io.File(tmp, "test.txt")
+            filePath.writeText("file content\n")
+
+            val oid = writeBlobFromFile(repo.gitDir, filePath.path)
+            val expected = hashBlob("file content\n".toByteArray())
+            assertEquals(expected, oid)
+
+            val blob = readBlob(repo.gitDir, oid)
+            assertEquals("file content\n", String(blob.data))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testReadNonBlobTypeErrors() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_blob_type_err")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val commitData = "tree 0000000000000000000000000000000000000000\nauthor T <t@t> 0 +0000\ncommitter T <t@t> 0 +0000\n\nm\n".toByteArray()
+            val oid = writeLooseObject(repo.gitDir, ObjectType.COMMIT, commitData)
+
+            assertFailsWith<MuonGitException.InvalidObject> {
+                readBlob(repo.gitDir, oid)
+            }
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
 }
