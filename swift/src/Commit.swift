@@ -71,6 +71,15 @@ public func parseCommit(oid: OID, data: Data) throws -> Commit {
 
 // MARK: - Serialization
 
+// Pre-computed byte arrays for commit serialization prefixes
+private let commitTreePrefix: [UInt8] = [UInt8]("tree ".utf8)
+private let commitParentPrefix: [UInt8] = [UInt8]("parent ".utf8)
+private let commitAuthorPrefix: [UInt8] = [UInt8]("author ".utf8)
+private let commitCommitterPrefix: [UInt8] = [UInt8]("committer ".utf8)
+private let commitEncodingPrefix: [UInt8] = [UInt8]("encoding ".utf8)
+private let commitSpaceLt: [UInt8] = [UInt8](" <".utf8)
+private let commitGtSpace: [UInt8] = [UInt8]("> ".utf8)
+
 /// Serialize a commit to its raw data representation (without the object header)
 public func serializeCommit(
     treeId: OID,
@@ -80,19 +89,86 @@ public func serializeCommit(
     message: String,
     messageEncoding: String? = nil
 ) -> Data {
-    var lines: [String] = []
-    lines.append("tree \(treeId.hex)")
+    var buf = [UInt8]()
+    buf.reserveCapacity(256 + message.count)
+
+    buf.append(contentsOf: commitTreePrefix)
+    treeId.appendHexBytes(to: &buf)
+    buf.append(0x0A)
+
     for pid in parentIds {
-        lines.append("parent \(pid.hex)")
+        buf.append(contentsOf: commitParentPrefix)
+        pid.appendHexBytes(to: &buf)
+        buf.append(0x0A)
     }
-    lines.append("author \(formatSignature(author))")
-    lines.append("committer \(formatSignature(committer))")
+
+    buf.append(contentsOf: commitAuthorPrefix)
+    appendSignatureBytes(author, to: &buf)
+    buf.append(0x0A)
+
+    buf.append(contentsOf: commitCommitterPrefix)
+    appendSignatureBytes(committer, to: &buf)
+    buf.append(0x0A)
+
     if let enc = messageEncoding {
-        lines.append("encoding \(enc)")
+        buf.append(contentsOf: commitEncodingPrefix)
+        var encStr = enc
+        encStr.withUTF8 { buf.append(contentsOf: $0) }
+        buf.append(0x0A)
     }
-    let header = lines.joined(separator: "\n")
-    let raw = "\(header)\n\n\(message)"
-    return Data(raw.utf8)
+
+    buf.append(0x0A)
+    var msg = message
+    msg.withUTF8 { buf.append(contentsOf: $0) }
+    return Data(buf)
+}
+
+/// Append a signature directly as bytes to a UInt8 buffer
+private func appendSignatureBytes(_ sig: Signature, to buf: inout [UInt8]) {
+    var name = sig.name
+    name.withUTF8 { buf.append(contentsOf: $0) }
+    buf.append(contentsOf: commitSpaceLt)
+    var email = sig.email
+    email.withUTF8 { buf.append(contentsOf: $0) }
+    buf.append(contentsOf: commitGtSpace)
+    appendInt64(sig.time, to: &buf)
+    buf.append(0x20) // space
+    buf.append(sig.offset >= 0 ? 0x2B : 0x2D) // '+' or '-'
+    let absOffset = abs(sig.offset)
+    let hours = absOffset / 60
+    let minutes = absOffset % 60
+    buf.append(UInt8(hours / 10) + 0x30)
+    buf.append(UInt8(hours % 10) + 0x30)
+    buf.append(UInt8(minutes / 10) + 0x30)
+    buf.append(UInt8(minutes % 10) + 0x30)
+}
+
+/// Append decimal representation of an Int64 directly to a UInt8 buffer
+private func appendInt64(_ value: Int64, to buf: inout [UInt8]) {
+    if value == 0 {
+        buf.append(0x30)
+        return
+    }
+    var v = value
+    if v < 0 {
+        buf.append(0x2D) // '-'
+        v = -v
+    }
+    let start = buf.count
+    while v > 0 {
+        buf.append(UInt8(v % 10) + 0x30)
+        v /= 10
+    }
+    // Reverse digits in-place
+    var lo = start
+    var hi = buf.count - 1
+    while lo < hi {
+        let tmp = buf[lo]
+        buf[lo] = buf[hi]
+        buf[hi] = tmp
+        lo += 1
+        hi -= 1
+    }
 }
 
 // MARK: - Signature helpers

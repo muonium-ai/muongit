@@ -82,6 +82,36 @@ public struct OID: Hashable, Sendable {
         }
     }
 
+    private static let hexLookup: [UInt8] = Array("0123456789abcdef".utf8)
+
+    /// Append hex representation of this OID directly to a Data buffer (avoids intermediate String)
+    func appendHexBytes(to data: inout Data) {
+        var copy = self
+        let count = Int(size)
+        withUnsafeBytes(of: &copy) { ptr in
+            let bytes = ptr.baseAddress!.assumingMemoryBound(to: UInt8.self)
+            for i in 0..<count {
+                let byte = bytes[i]
+                data.append(OID.hexLookup[Int(byte >> 4)])
+                data.append(OID.hexLookup[Int(byte & 0x0F)])
+            }
+        }
+    }
+
+    /// Append hex representation of this OID directly to a UInt8 buffer (fastest path)
+    func appendHexBytes(to buf: inout [UInt8]) {
+        var copy = self
+        let count = Int(size)
+        withUnsafeBytes(of: &copy) { ptr in
+            let bytes = ptr.baseAddress!.assumingMemoryBound(to: UInt8.self)
+            for i in 0..<count {
+                let byte = bytes[i]
+                buf.append(OID.hexLookup[Int(byte >> 4)])
+                buf.append(OID.hexLookup[Int(byte & 0x0F)])
+            }
+        }
+    }
+
     public static func == (lhs: OID, rhs: OID) -> Bool {
         lhs.a == rhs.a && lhs.b == rhs.b && lhs.c == rhs.c && lhs.d == rhs.d
     }

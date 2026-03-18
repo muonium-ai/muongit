@@ -1,5 +1,7 @@
 package ai.muonium.muongit
 
+import java.io.ByteArrayOutputStream
+
 /** A parsed git commit object */
 data class Commit(
     val oid: OID,
@@ -47,6 +49,15 @@ fun parseCommit(oid: OID, data: ByteArray): Commit {
     )
 }
 
+private val HEX_CHARS = "0123456789abcdef".toByteArray()
+private val TREE_PREFIX = "tree ".toByteArray()
+private val PARENT_PREFIX = "parent ".toByteArray()
+private val AUTHOR_PREFIX = "author ".toByteArray()
+private val COMMITTER_PREFIX = "committer ".toByteArray()
+private val ENCODING_PREFIX = "encoding ".toByteArray()
+private val SPACE_LT = " <".toByteArray()
+private val GT_SPACE = "> ".toByteArray()
+
 /** Serialize a commit to its raw data representation (without the object header) */
 fun serializeCommit(
     treeId: OID,
@@ -56,19 +67,53 @@ fun serializeCommit(
     message: String,
     messageEncoding: String? = null
 ): ByteArray {
-    val sb = StringBuilder()
-    sb.append("tree ").append(treeId.hex).append('\n')
+    val buf = ByteArrayOutputStream(256 + message.length)
+    buf.write(TREE_PREFIX)
+    writeHex(treeId.raw, buf)
+    buf.write('\n'.code)
     for (pid in parentIds) {
-        sb.append("parent ").append(pid.hex).append('\n')
+        buf.write(PARENT_PREFIX)
+        writeHex(pid.raw, buf)
+        buf.write('\n'.code)
     }
-    sb.append("author ").append(formatSignatureLine(author)).append('\n')
-    sb.append("committer ").append(formatSignatureLine(committer)).append('\n')
+    buf.write(AUTHOR_PREFIX)
+    writeSignatureBytes(author, buf)
+    buf.write('\n'.code)
+    buf.write(COMMITTER_PREFIX)
+    writeSignatureBytes(committer, buf)
+    buf.write('\n'.code)
     if (messageEncoding != null) {
-        sb.append("encoding ").append(messageEncoding).append('\n')
+        buf.write(ENCODING_PREFIX)
+        buf.write(messageEncoding.toByteArray())
+        buf.write('\n'.code)
     }
-    sb.append('\n')
-    sb.append(message)
-    return sb.toString().toByteArray()
+    buf.write('\n'.code)
+    buf.write(message.toByteArray())
+    return buf.toByteArray()
+}
+
+private fun writeHex(raw: ByteArray, buf: ByteArrayOutputStream) {
+    for (b in raw) {
+        buf.write(HEX_CHARS[(b.toInt() shr 4) and 0x0F].toInt())
+        buf.write(HEX_CHARS[b.toInt() and 0x0F].toInt())
+    }
+}
+
+private fun writeSignatureBytes(sig: Signature, buf: ByteArrayOutputStream) {
+    buf.write(sig.name.toByteArray())
+    buf.write(SPACE_LT)
+    buf.write(sig.email.toByteArray())
+    buf.write(GT_SPACE)
+    buf.write(sig.time.toString().toByteArray())
+    buf.write(' '.code)
+    buf.write(if (sig.offset >= 0) '+'.code else '-'.code)
+    val abs = kotlin.math.abs(sig.offset)
+    val hours = abs / 60
+    val minutes = abs % 60
+    buf.write('0'.code + hours / 10)
+    buf.write('0'.code + hours % 10)
+    buf.write('0'.code + minutes / 10)
+    buf.write('0'.code + minutes % 10)
 }
 
 /** Parse "Name <email> timestamp offset" into a Signature */

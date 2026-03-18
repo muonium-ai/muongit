@@ -70,19 +70,73 @@ pub fn serialize_commit(
     message: &str,
     message_encoding: Option<&str>,
 ) -> Vec<u8> {
-    let mut buf = String::new();
-    buf.push_str(&format!("tree {}\n", tree_id.hex()));
+    let mut buf = Vec::with_capacity(256 + message.len());
+    buf.extend_from_slice(b"tree ");
+    write_hex(tree_id, &mut buf);
+    buf.push(b'\n');
     for pid in parent_ids {
-        buf.push_str(&format!("parent {}\n", pid.hex()));
+        buf.extend_from_slice(b"parent ");
+        write_hex(pid, &mut buf);
+        buf.push(b'\n');
     }
-    buf.push_str(&format!("author {}\n", format_signature(author)));
-    buf.push_str(&format!("committer {}\n", format_signature(committer)));
+    buf.extend_from_slice(b"author ");
+    write_signature(author, &mut buf);
+    buf.push(b'\n');
+    buf.extend_from_slice(b"committer ");
+    write_signature(committer, &mut buf);
+    buf.push(b'\n');
     if let Some(enc) = message_encoding {
-        buf.push_str(&format!("encoding {}\n", enc));
+        buf.extend_from_slice(b"encoding ");
+        buf.extend_from_slice(enc.as_bytes());
+        buf.push(b'\n');
     }
-    buf.push('\n');
-    buf.push_str(message);
-    buf.into_bytes()
+    buf.push(b'\n');
+    buf.extend_from_slice(message.as_bytes());
+    buf
+}
+
+const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
+
+fn write_hex(oid: &OID, buf: &mut Vec<u8>) {
+    for &byte in oid.raw() {
+        buf.push(HEX_CHARS[(byte >> 4) as usize]);
+        buf.push(HEX_CHARS[(byte & 0x0F) as usize]);
+    }
+}
+
+fn write_i64(val: i64, buf: &mut Vec<u8>) {
+    if val == 0 {
+        buf.push(b'0');
+        return;
+    }
+    let mut v = val;
+    if v < 0 {
+        buf.push(b'-');
+        v = -v;
+    }
+    let start = buf.len();
+    while v > 0 {
+        buf.push(b'0' + (v % 10) as u8);
+        v /= 10;
+    }
+    buf[start..].reverse();
+}
+
+fn write_signature(sig: &Signature, buf: &mut Vec<u8>) {
+    buf.extend_from_slice(sig.name.as_bytes());
+    buf.extend_from_slice(b" <");
+    buf.extend_from_slice(sig.email.as_bytes());
+    buf.extend_from_slice(b"> ");
+    write_i64(sig.time, buf);
+    buf.push(b' ');
+    buf.push(if sig.offset >= 0 { b'+' } else { b'-' });
+    let abs = sig.offset.unsigned_abs();
+    let hours = abs / 60;
+    let minutes = abs % 60;
+    buf.push(b'0' + (hours / 10) as u8);
+    buf.push(b'0' + (hours % 10) as u8);
+    buf.push(b'0' + (minutes / 10) as u8);
+    buf.push(b'0' + (minutes % 10) as u8);
 }
 
 /// Parse "Name <email> timestamp offset" into a Signature

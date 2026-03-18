@@ -1,0 +1,17 @@
+{"op":"sha1_10kb","lang":"swift","iterations":50,"min_ms":0.006,"mean_ms":0.007,"median_ms":0.007,"ops_per_sec":144084.6}
+{"op":"sha256_10kb","lang":"swift","iterations":50,"min_ms":0.006,"mean_ms":0.006,"median_ms":0.006,"ops_per_sec":154372.6}
+{"op":"oid_cmp_256x16k","lang":"swift","iterations":10,"min_ms":3.608,"mean_ms":4.640,"median_ms":4.360,"ops_per_sec":215.5}
+{"op":"sha1_1mb","lang":"swift","iterations":20,"min_ms":0.345,"mean_ms":0.352,"median_ms":0.349,"ops_per_sec":2837.7}
+{"op":"sha256_1mb","lang":"swift","iterations":20,"min_ms":0.326,"mean_ms":0.338,"median_ms":0.335,"ops_per_sec":2955.6}
+{"op":"sha1_10mb","lang":"swift","iterations":5,"min_ms":2.949,"mean_ms":3.148,"median_ms":3.225,"ops_per_sec":317.7}
+{"op":"sha256_10mb","lang":"swift","iterations":5,"min_ms":2.924,"mean_ms":2.980,"median_ms":2.939,"ops_per_sec":335.6}
+{"op":"oid_create_10k","lang":"swift","iterations":10,"min_ms":4.039,"mean_ms":4.269,"median_ms":4.270,"ops_per_sec":234.2}
+{"op":"oid_create_100k","lang":"swift","iterations":3,"min_ms":41.836,"mean_ms":42.361,"median_ms":42.361,"ops_per_sec":23.6}
+{"op":"blob_hash_10k","lang":"swift","iterations":10,"min_ms":4.266,"mean_ms":4.463,"median_ms":4.491,"ops_per_sec":224.1}
+{"op":"tree_serialize_1k","lang":"swift","iterations":20,"min_ms":0.354,"mean_ms":0.371,"median_ms":0.368,"ops_per_sec":2698.3}
+{"op":"tree_serialize_10k","lang":"swift","iterations":5,"min_ms":3.484,"mean_ms":3.678,"median_ms":3.714,"ops_per_sec":271.9}
+{"op":"commit_serialize_10k","lang":"swift","iterations":10,"min_ms":30.429,"mean_ms":30.693,"median_ms":30.688,"ops_per_sec":32.6}
+{"op":"index_rw_1k","lang":"swift","iterations":20,"min_ms":0.794,"mean_ms":0.872,"median_ms":0.871,"ops_per_sec":1146.9}
+{"op":"index_rw_10k","lang":"swift","iterations":5,"min_ms":7.896,"mean_ms":7.935,"median_ms":7.924,"ops_per_sec":126.0}
+{"op":"diff_1k","lang":"swift","iterations":50,"min_ms":0.037,"mean_ms":0.041,"median_ms":0.042,"ops_per_sec":24144.0}
+{"op":"diff_10k","lang":"swift","iterations":10,"min_ms":0.411,"mean_ms":0.429,"median_ms":0.427,"ops_per_sec":2328.9}
