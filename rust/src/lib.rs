@@ -28,12 +28,7 @@ pub use repository::Repository;
 
 /// Library version information
 pub mod version {
-    pub const MAJOR: u32 = 0;
-    pub const MINOR: u32 = 1;
-    pub const PATCH: u32 = 0;
+    /// Version string read from the root VERSION file at build time.
+    pub const STRING: &str = env!("MUONGIT_VERSION");
     pub const LIBGIT2_PARITY: &str = "1.9.0";
-
-    pub fn string() -> String {
-        format!("{}.{}.{}", MAJOR, MINOR, PATCH)
-    }
 }

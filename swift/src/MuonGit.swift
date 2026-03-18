@@ -190,9 +190,9 @@ public enum MuonGitError: Error, Sendable {
 
 /// Library version information
 public enum MuonGitVersion {
-    public static let major = 0
-    public static let minor = 1
-    public static let patch = 0
-    public static let string = "\(major).\(minor).\(patch)"
+    public static let major = GeneratedVersion.major
+    public static let minor = GeneratedVersion.minor
+    public static let patch = GeneratedVersion.patch
+    public static let string = GeneratedVersion.string
     public static let libgit2Parity = "1.9.0"
 }

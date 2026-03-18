@@ -154,9 +154,9 @@ sealed class MuonGitException(message: String) : Exception(message) {
 
 /** Library version information */
 object MuonGitVersion {
-    const val MAJOR = 0
-    const val MINOR = 1
-    const val PATCH = 0
-    const val STRING = "$MAJOR.$MINOR.$PATCH"
+    val MAJOR: Int get() = GeneratedVersion.MAJOR
+    val MINOR: Int get() = GeneratedVersion.MINOR
+    val PATCH: Int get() = GeneratedVersion.PATCH
+    val STRING: String get() = GeneratedVersion.STRING
     const val LIBGIT2_PARITY = "1.9.0"
 }
