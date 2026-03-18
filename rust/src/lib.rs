@@ -7,6 +7,7 @@ pub mod error;
 pub mod sha1;
 pub mod repository;
 pub mod odb;
+pub mod refs;
 
 pub use oid::OID;
 pub use types::{ObjectType, Signature};

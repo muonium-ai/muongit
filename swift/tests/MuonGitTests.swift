@@ -47,6 +47,7 @@ final class MuonGitTests: XCTestCase {
     }
 
     func testSHA1GitBlob() {
+        // git hash-object equivalent: "hello\n" as blob
         let data = Array("hello\n".utf8)
         let oid = OID.hash(type: .blob, data: data)
         XCTAssertEqual(oid.hex, "ce013625030ba8dba906f756967f9e9ca394464a")
@@ -127,5 +128,32 @@ final class MuonGitTests: XCTestCase {
         let (readType, readData) = try readLooseObject(gitDir: repo.gitDir, oid: oid)
         XCTAssertEqual(readType, .blob)
         XCTAssertEqual(readData, blobData)
+    }
+
+    // MARK: - Refs Tests
+
+    func testReadReference() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_refs"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let headValue = try readReference(gitDir: repo.gitDir, name: "HEAD")
+        XCTAssertEqual(headValue, "ref: refs/heads/main")
+    }
+
+    func testResolveReferenceUnbornThrows() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_refs_unborn"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        // HEAD points to refs/heads/main, but that ref doesn't exist yet (unborn)
+        XCTAssertThrowsError(try resolveReference(gitDir: repo.gitDir, name: "HEAD")) { error in
+            guard case MuonGitError.notFound = error else {
+                XCTFail("Expected MuonGitError.notFound, got \(error)")
+                return
+            }
+        }
     }
 }
