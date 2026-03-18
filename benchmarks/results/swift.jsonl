@@ -1,0 +1,17 @@
+{"op":"sha1_10kb","lang":"swift","iterations":50,"min_ms":0.046,"mean_ms":0.047,"median_ms":0.047,"ops_per_sec":21221.9}
+{"op":"sha256_10kb","lang":"swift","iterations":50,"min_ms":0.051,"mean_ms":0.052,"median_ms":0.051,"ops_per_sec":19365.2}
+{"op":"oid_cmp_256x16k","lang":"swift","iterations":10,"min_ms":32.993,"mean_ms":34.145,"median_ms":34.091,"ops_per_sec":29.3}
+{"op":"sha1_1mb","lang":"swift","iterations":20,"min_ms":112.787,"mean_ms":113.120,"median_ms":113.130,"ops_per_sec":8.8}
+{"op":"sha256_1mb","lang":"swift","iterations":20,"min_ms":113.524,"mean_ms":114.282,"median_ms":114.012,"ops_per_sec":8.8}
+{"op":"sha1_10mb","lang":"swift","iterations":5,"min_ms":12932.725,"mean_ms":13395.102,"median_ms":13511.375,"ops_per_sec":0.1}
+{"op":"sha256_10mb","lang":"swift","iterations":5,"min_ms":11960.888,"mean_ms":12019.207,"median_ms":11990.729,"ops_per_sec":0.1}
+{"op":"oid_create_10k","lang":"swift","iterations":10,"min_ms":5.813,"mean_ms":6.231,"median_ms":6.082,"ops_per_sec":160.5}
+{"op":"oid_create_100k","lang":"swift","iterations":3,"min_ms":57.847,"mean_ms":61.507,"median_ms":60.471,"ops_per_sec":16.3}
+{"op":"blob_hash_10k","lang":"swift","iterations":10,"min_ms":6.182,"mean_ms":6.368,"median_ms":6.373,"ops_per_sec":157.0}
+{"op":"tree_serialize_1k","lang":"swift","iterations":20,"min_ms":0.542,"mean_ms":0.550,"median_ms":0.548,"ops_per_sec":1816.9}
+{"op":"tree_serialize_10k","lang":"swift","iterations":5,"min_ms":5.370,"mean_ms":5.409,"median_ms":5.425,"ops_per_sec":184.9}
+{"op":"commit_serialize_10k","lang":"swift","iterations":10,"min_ms":146.441,"mean_ms":147.775,"median_ms":148.013,"ops_per_sec":6.8}
+{"op":"index_rw_1k","lang":"swift","iterations":20,"min_ms":2.155,"mean_ms":2.326,"median_ms":2.334,"ops_per_sec":429.9}
+{"op":"index_rw_10k","lang":"swift","iterations":5,"min_ms":181.019,"mean_ms":181.627,"median_ms":181.439,"ops_per_sec":5.5}
+{"op":"diff_1k","lang":"swift","iterations":50,"min_ms":0.040,"mean_ms":0.042,"median_ms":0.041,"ops_per_sec":23785.3}
+{"op":"diff_10k","lang":"swift","iterations":10,"min_ms":0.417,"mean_ms":0.418,"median_ms":0.418,"ops_per_sec":2390.6}

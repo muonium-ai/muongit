@@ -75,5 +75,8 @@ swift/.swiftpm/
 # Project temp directory (used by agents for test repos, scratch work)
 tmp/
 
+# libgit2 build artifacts
+vendor/libgit2/build/
+
 # MuonTickets
 tickets/mt/muontickets/.muontickets.db

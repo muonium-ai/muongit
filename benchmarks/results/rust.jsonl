@@ -1,0 +1,17 @@
+{"op":"sha1_10kb","lang":"rust","iterations":50,"min_ms":0.097,"mean_ms":0.099,"median_ms":0.098,"ops_per_sec":10060.1}
+{"op":"sha256_10kb","lang":"rust","iterations":50,"min_ms":0.089,"mean_ms":0.093,"median_ms":0.089,"ops_per_sec":10773.8}
+{"op":"oid_cmp_256x16k","lang":"rust","iterations":10,"min_ms":0.000,"mean_ms":0.000,"median_ms":0.000,"ops_per_sec":47846890.0}
+{"op":"sha1_1mb","lang":"rust","iterations":20,"min_ms":109.557,"mean_ms":113.255,"median_ms":111.443,"ops_per_sec":8.8}
+{"op":"sha256_1mb","lang":"rust","iterations":20,"min_ms":111.438,"mean_ms":111.743,"median_ms":111.678,"ops_per_sec":8.9}
+{"op":"sha1_10mb","lang":"rust","iterations":5,"min_ms":13162.594,"mean_ms":13350.883,"median_ms":13343.715,"ops_per_sec":0.1}
+{"op":"sha256_10mb","lang":"rust","iterations":5,"min_ms":11907.913,"mean_ms":11970.130,"median_ms":11950.367,"ops_per_sec":0.1}
+{"op":"oid_create_10k","lang":"rust","iterations":10,"min_ms":12.276,"mean_ms":12.940,"median_ms":12.937,"ops_per_sec":77.3}
+{"op":"oid_create_100k","lang":"rust","iterations":3,"min_ms":126.087,"mean_ms":129.356,"median_ms":127.753,"ops_per_sec":7.7}
+{"op":"blob_hash_10k","lang":"rust","iterations":10,"min_ms":12.389,"mean_ms":12.835,"median_ms":12.771,"ops_per_sec":77.9}
+{"op":"tree_serialize_1k","lang":"rust","iterations":20,"min_ms":0.992,"mean_ms":1.006,"median_ms":1.005,"ops_per_sec":994.2}
+{"op":"tree_serialize_10k","lang":"rust","iterations":5,"min_ms":10.347,"mean_ms":10.579,"median_ms":10.706,"ops_per_sec":94.5}
+{"op":"commit_serialize_10k","lang":"rust","iterations":10,"min_ms":15.098,"mean_ms":16.043,"median_ms":16.207,"ops_per_sec":62.3}
+{"op":"index_rw_1k","lang":"rust","iterations":20,"min_ms":2.212,"mean_ms":2.378,"median_ms":2.397,"ops_per_sec":420.5}
+{"op":"index_rw_10k","lang":"rust","iterations":5,"min_ms":193.512,"mean_ms":197.971,"median_ms":195.959,"ops_per_sec":5.1}
+{"op":"diff_1k","lang":"rust","iterations":50,"min_ms":0.016,"mean_ms":0.016,"median_ms":0.016,"ops_per_sec":62305.0}
+{"op":"diff_10k","lang":"rust","iterations":10,"min_ms":0.160,"mean_ms":0.167,"median_ms":0.168,"ops_per_sec":5982.4}

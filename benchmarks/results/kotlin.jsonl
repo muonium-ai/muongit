@@ -1,0 +1,12 @@
+{"op":"sha1_10kb","lang":"kotlin","iterations":5,"min_ms":3.236,"mean_ms":3.348,"median_ms":3.338,"ops_per_sec":298.7}
+{"op":"sha256_10kb","lang":"kotlin","iterations":5,"min_ms":2.761,"mean_ms":3.132,"median_ms":3.153,"ops_per_sec":319.3}
+{"op":"oid_cmp_256x16k","lang":"kotlin","iterations":10,"min_ms":7.183,"mean_ms":7.478,"median_ms":7.529,"ops_per_sec":133.7}
+{"op":"oid_create_1k","lang":"kotlin","iterations":5,"min_ms":1.290,"mean_ms":1.738,"median_ms":1.914,"ops_per_sec":575.4}
+{"op":"blob_hash_1k","lang":"kotlin","iterations":5,"min_ms":1.153,"mean_ms":1.416,"median_ms":1.482,"ops_per_sec":706.1}
+{"op":"tree_serialize_1k","lang":"kotlin","iterations":20,"min_ms":0.364,"mean_ms":0.505,"median_ms":0.442,"ops_per_sec":1979.6}
+{"op":"tree_serialize_10k","lang":"kotlin","iterations":5,"min_ms":1.667,"mean_ms":2.931,"median_ms":3.460,"ops_per_sec":341.2}
+{"op":"commit_serialize_10k","lang":"kotlin","iterations":10,"min_ms":46.579,"mean_ms":48.428,"median_ms":48.158,"ops_per_sec":20.6}
+{"op":"index_rw_1k","lang":"kotlin","iterations":3,"min_ms":429.234,"mean_ms":430.905,"median_ms":431.472,"ops_per_sec":2.3}
+{"op":"index_rw_10k","lang":"kotlin","iterations":1,"min_ms":57107.589,"mean_ms":57107.589,"median_ms":57107.589,"ops_per_sec":0.0}
+{"op":"diff_1k","lang":"kotlin","iterations":50,"min_ms":0.164,"mean_ms":0.169,"median_ms":0.167,"ops_per_sec":5914.0}
+{"op":"diff_10k","lang":"kotlin","iterations":10,"min_ms":0.218,"mean_ms":0.236,"median_ms":0.221,"ops_per_sec":4238.8}
