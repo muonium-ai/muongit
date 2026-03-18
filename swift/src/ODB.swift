@@ -4,7 +4,7 @@ import Foundation
 
 // MARK: - Object Type String Helpers
 
-private func objectTypeName(_ type: ObjectType) -> String {
+func objectTypeName(_ type: ObjectType) -> String {
     switch type {
     case .commit: return "commit"
     case .tree:   return "tree"
@@ -13,7 +13,7 @@ private func objectTypeName(_ type: ObjectType) -> String {
     }
 }
 
-private func objectTypeFromName(_ name: String) throws -> ObjectType {
+func objectTypeFromName(_ name: String) throws -> ObjectType {
     switch name {
     case "commit": return .commit
     case "tree":   return .tree

@@ -564,4 +564,73 @@ class MuonGitTest {
             tmp.deleteRecursively()
         }
     }
+
+    // Tag Tests
+
+    @Test
+    fun testParseAndSerializeTag() {
+        val targetId = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val tagger = Signature(name = "Tagger", email = "tagger@example.com", time = 1234567890L, offset = 0)
+
+        val data = serializeTag(targetId, ObjectType.COMMIT, "v1.0", tagger, "Release v1.0\n")
+        val oid = OID.hashObject(ObjectType.TAG, data)
+        val tag = parseTag(oid, data)
+
+        assertEquals(targetId, tag.targetId)
+        assertEquals(ObjectType.COMMIT, tag.targetType)
+        assertEquals("v1.0", tag.tagName)
+        assertEquals("Tagger", tag.tagger?.name)
+        assertEquals("Release v1.0\n", tag.message)
+    }
+
+    @Test
+    fun testTagWithoutTagger() {
+        val targetId = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val data = serializeTag(targetId, ObjectType.COMMIT, "v0.1", null, "lightweight\n")
+        val oid = OID.hashObject(ObjectType.TAG, data)
+        val tag = parseTag(oid, data)
+
+        assertNull(tag.tagger)
+        assertEquals("v0.1", tag.tagName)
+    }
+
+    @Test
+    fun testTagMissingObjectThrows() {
+        val raw = "type commit\ntag v1\n\nmsg\n".toByteArray()
+        assertFailsWith<MuonGitException.InvalidObject> {
+            parseTag(OID.ZERO, raw)
+        }
+    }
+
+    @Test
+    fun testTagTargetingTree() {
+        val targetId = OID("4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        val data = serializeTag(targetId, ObjectType.TREE, "tree-tag", null, "tag a tree\n")
+        val oid = OID.hashObject(ObjectType.TAG, data)
+        val tag = parseTag(oid, data)
+
+        assertEquals(ObjectType.TREE, tag.targetType)
+    }
+
+    @Test
+    fun testTagODBRoundTrip() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_tag_odb")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val targetId = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            val tagger = Signature(name = "T", email = "t@t.com", time = 100L, offset = 0)
+            val tagData = serializeTag(targetId, ObjectType.COMMIT, "v1.0", tagger, "msg\n")
+            val oid = writeLooseObject(repo.gitDir, ObjectType.TAG, tagData)
+
+            val (readType, readData) = readLooseObject(repo.gitDir, oid)
+            assertEquals(ObjectType.TAG, readType)
+
+            val tag = parseTag(oid, readData)
+            assertEquals("v1.0", tag.tagName)
+            assertEquals(targetId, tag.targetId)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
 }

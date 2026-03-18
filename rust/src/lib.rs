@@ -11,6 +11,7 @@ pub mod refs;
 pub mod commit;
 pub mod tree;
 pub mod blob;
+pub mod tag;
 
 pub use oid::OID;
 pub use types::{ObjectType, Signature};

@@ -491,4 +491,64 @@ final class MuonGitTests: XCTestCase {
 
         XCTAssertThrowsError(try readBlob(gitDir: repo.gitDir, oid: oid))
     }
+
+    // MARK: - Tag Tests
+
+    func testParseAndSerializeTag() throws {
+        let targetId = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let tagger = Signature(name: "Tagger", email: "tagger@example.com", time: 1234567890, offset: 0)
+
+        let data = serializeTag(targetId: targetId, targetType: .commit, tagName: "v1.0", tagger: tagger, message: "Release v1.0\n")
+        let oid = OID.hash(type: .tag, data: Array(data))
+        let tag = try parseTag(oid: oid, data: data)
+
+        XCTAssertEqual(tag.targetId, targetId)
+        XCTAssertEqual(tag.targetType, .commit)
+        XCTAssertEqual(tag.tagName, "v1.0")
+        XCTAssertEqual(tag.tagger?.name, "Tagger")
+        XCTAssertEqual(tag.message, "Release v1.0\n")
+    }
+
+    func testTagWithoutTagger() throws {
+        let targetId = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let data = serializeTag(targetId: targetId, targetType: .commit, tagName: "v0.1", tagger: nil, message: "lightweight\n")
+        let oid = OID.hash(type: .tag, data: Array(data))
+        let tag = try parseTag(oid: oid, data: data)
+
+        XCTAssertNil(tag.tagger)
+        XCTAssertEqual(tag.tagName, "v0.1")
+    }
+
+    func testTagMissingObjectThrows() {
+        let raw = Data("type commit\ntag v1\n\nmsg\n".utf8)
+        XCTAssertThrowsError(try parseTag(oid: OID.zero, data: raw))
+    }
+
+    func testTagTargetingTree() throws {
+        let targetId = OID(hex: "4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        let data = serializeTag(targetId: targetId, targetType: .tree, tagName: "tree-tag", tagger: nil, message: "tag a tree\n")
+        let oid = OID.hash(type: .tag, data: Array(data))
+        let tag = try parseTag(oid: oid, data: data)
+
+        XCTAssertEqual(tag.targetType, .tree)
+    }
+
+    func testTagODBRoundTrip() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_tag_odb"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let targetId = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let tagger = Signature(name: "T", email: "t@t.com", time: 100, offset: 0)
+        let tagData = serializeTag(targetId: targetId, targetType: .commit, tagName: "v1.0", tagger: tagger, message: "msg\n")
+        let oid = try writeLooseObject(gitDir: repo.gitDir, type: .tag, data: tagData)
+
+        let (readType, readData) = try readLooseObject(gitDir: repo.gitDir, oid: oid)
+        XCTAssertEqual(readType, .tag)
+
+        let tag = try parseTag(oid: oid, data: readData)
+        XCTAssertEqual(tag.tagName, "v1.0")
+        XCTAssertEqual(tag.targetId, targetId)
+    }
 }
