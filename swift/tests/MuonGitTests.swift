@@ -876,4 +876,102 @@ final class MuonGitTests: XCTestCase {
 
         XCTAssertThrowsError(try readIndex(gitDir: repo.gitDir))
     }
+
+    // MARK: - Diff Tests
+
+    private func treeEntry(_ name: String, _ hex: String, _ mode: UInt32) -> TreeEntry {
+        TreeEntry(mode: mode, name: name, oid: OID(hex: hex))
+    }
+
+    func testDiffIdenticalTrees() {
+        let oid = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        let entries = [treeEntry("a.txt", oid, FileMode.blob.rawValue), treeEntry("b.txt", oid, FileMode.blob.rawValue)]
+        let deltas = diffTrees(oldEntries: entries, newEntries: entries)
+        XCTAssertTrue(deltas.isEmpty)
+    }
+
+    func testDiffAddedFile() {
+        let oid = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        let old = [treeEntry("a.txt", oid, FileMode.blob.rawValue)]
+        let new = [treeEntry("a.txt", oid, FileMode.blob.rawValue), treeEntry("b.txt", oid, FileMode.blob.rawValue)]
+        let deltas = diffTrees(oldEntries: old, newEntries: new)
+        XCTAssertEqual(deltas.count, 1)
+        XCTAssertEqual(deltas[0].status, .added)
+        XCTAssertEqual(deltas[0].path, "b.txt")
+        XCTAssertNil(deltas[0].oldEntry)
+        XCTAssertNotNil(deltas[0].newEntry)
+    }
+
+    func testDiffDeletedFile() {
+        let oid = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        let old = [treeEntry("a.txt", oid, FileMode.blob.rawValue), treeEntry("b.txt", oid, FileMode.blob.rawValue)]
+        let new = [treeEntry("a.txt", oid, FileMode.blob.rawValue)]
+        let deltas = diffTrees(oldEntries: old, newEntries: new)
+        XCTAssertEqual(deltas.count, 1)
+        XCTAssertEqual(deltas[0].status, .deleted)
+        XCTAssertEqual(deltas[0].path, "b.txt")
+        XCTAssertNotNil(deltas[0].oldEntry)
+        XCTAssertNil(deltas[0].newEntry)
+    }
+
+    func testDiffModifiedFile() {
+        let oid1 = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        let oid2 = "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        let old = [treeEntry("a.txt", oid1, FileMode.blob.rawValue)]
+        let new = [treeEntry("a.txt", oid2, FileMode.blob.rawValue)]
+        let deltas = diffTrees(oldEntries: old, newEntries: new)
+        XCTAssertEqual(deltas.count, 1)
+        XCTAssertEqual(deltas[0].status, .modified)
+        XCTAssertEqual(deltas[0].path, "a.txt")
+        XCTAssertNotNil(deltas[0].oldEntry)
+        XCTAssertNotNil(deltas[0].newEntry)
+    }
+
+    func testDiffModeChange() {
+        let oid = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        let old = [treeEntry("script.sh", oid, FileMode.blob.rawValue)]
+        let new = [treeEntry("script.sh", oid, FileMode.blobExe.rawValue)]
+        let deltas = diffTrees(oldEntries: old, newEntries: new)
+        XCTAssertEqual(deltas.count, 1)
+        XCTAssertEqual(deltas[0].status, .modified)
+    }
+
+    func testDiffEmptyToFull() {
+        let oid = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        let new = [treeEntry("a.txt", oid, FileMode.blob.rawValue), treeEntry("b.txt", oid, FileMode.blob.rawValue)]
+        let deltas = diffTrees(oldEntries: [], newEntries: new)
+        XCTAssertEqual(deltas.count, 2)
+        XCTAssertTrue(deltas.allSatisfy { $0.status == .added })
+    }
+
+    func testDiffFullToEmpty() {
+        let oid = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        let old = [treeEntry("a.txt", oid, FileMode.blob.rawValue), treeEntry("b.txt", oid, FileMode.blob.rawValue)]
+        let deltas = diffTrees(oldEntries: old, newEntries: [])
+        XCTAssertEqual(deltas.count, 2)
+        XCTAssertTrue(deltas.allSatisfy { $0.status == .deleted })
+    }
+
+    func testDiffMixedChanges() {
+        let oid1 = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        let oid2 = "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        let old = [
+            treeEntry("a.txt", oid1, FileMode.blob.rawValue),
+            treeEntry("b.txt", oid1, FileMode.blob.rawValue),
+            treeEntry("c.txt", oid1, FileMode.blob.rawValue),
+        ]
+        let new = [
+            treeEntry("a.txt", oid1, FileMode.blob.rawValue), // unchanged
+            treeEntry("b.txt", oid2, FileMode.blob.rawValue), // modified
+            treeEntry("d.txt", oid1, FileMode.blob.rawValue), // added
+        ]
+        let deltas = diffTrees(oldEntries: old, newEntries: new)
+        XCTAssertEqual(deltas.count, 3)
+        XCTAssertEqual(deltas[0].status, .modified)
+        XCTAssertEqual(deltas[0].path, "b.txt")
+        XCTAssertEqual(deltas[1].status, .deleted)
+        XCTAssertEqual(deltas[1].path, "c.txt")
+        XCTAssertEqual(deltas[2].status, .added)
+        XCTAssertEqual(deltas[2].path, "d.txt")
+    }
 }

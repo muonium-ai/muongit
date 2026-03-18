@@ -1007,4 +1007,109 @@ class MuonGitTest {
             tmp.deleteRecursively()
         }
     }
+
+    // Diff Tests
+
+    private fun treeEntry(name: String, hex: String, mode: Int) =
+        TreeEntry(mode = mode, name = name, oid = OID(hex))
+
+    @Test
+    fun testDiffIdenticalTrees() {
+        val oid = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        val entries = listOf(treeEntry("a.txt", oid, FileMode.BLOB), treeEntry("b.txt", oid, FileMode.BLOB))
+        val deltas = diffTrees(entries, entries)
+        assertTrue(deltas.isEmpty())
+    }
+
+    @Test
+    fun testDiffAddedFile() {
+        val oid = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        val old = listOf(treeEntry("a.txt", oid, FileMode.BLOB))
+        val new = listOf(treeEntry("a.txt", oid, FileMode.BLOB), treeEntry("b.txt", oid, FileMode.BLOB))
+        val deltas = diffTrees(old, new)
+        assertEquals(1, deltas.size)
+        assertEquals(DiffStatus.ADDED, deltas[0].status)
+        assertEquals("b.txt", deltas[0].path)
+        assertNull(deltas[0].oldEntry)
+        assertNotNull(deltas[0].newEntry)
+    }
+
+    @Test
+    fun testDiffDeletedFile() {
+        val oid = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        val old = listOf(treeEntry("a.txt", oid, FileMode.BLOB), treeEntry("b.txt", oid, FileMode.BLOB))
+        val new = listOf(treeEntry("a.txt", oid, FileMode.BLOB))
+        val deltas = diffTrees(old, new)
+        assertEquals(1, deltas.size)
+        assertEquals(DiffStatus.DELETED, deltas[0].status)
+        assertEquals("b.txt", deltas[0].path)
+        assertNotNull(deltas[0].oldEntry)
+        assertNull(deltas[0].newEntry)
+    }
+
+    @Test
+    fun testDiffModifiedFile() {
+        val oid1 = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        val oid2 = "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        val old = listOf(treeEntry("a.txt", oid1, FileMode.BLOB))
+        val new = listOf(treeEntry("a.txt", oid2, FileMode.BLOB))
+        val deltas = diffTrees(old, new)
+        assertEquals(1, deltas.size)
+        assertEquals(DiffStatus.MODIFIED, deltas[0].status)
+        assertEquals("a.txt", deltas[0].path)
+        assertNotNull(deltas[0].oldEntry)
+        assertNotNull(deltas[0].newEntry)
+    }
+
+    @Test
+    fun testDiffModeChange() {
+        val oid = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        val old = listOf(treeEntry("script.sh", oid, FileMode.BLOB))
+        val new = listOf(treeEntry("script.sh", oid, FileMode.BLOB_EXE))
+        val deltas = diffTrees(old, new)
+        assertEquals(1, deltas.size)
+        assertEquals(DiffStatus.MODIFIED, deltas[0].status)
+    }
+
+    @Test
+    fun testDiffEmptyToFull() {
+        val oid = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        val new = listOf(treeEntry("a.txt", oid, FileMode.BLOB), treeEntry("b.txt", oid, FileMode.BLOB))
+        val deltas = diffTrees(emptyList(), new)
+        assertEquals(2, deltas.size)
+        assertTrue(deltas.all { it.status == DiffStatus.ADDED })
+    }
+
+    @Test
+    fun testDiffFullToEmpty() {
+        val oid = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        val old = listOf(treeEntry("a.txt", oid, FileMode.BLOB), treeEntry("b.txt", oid, FileMode.BLOB))
+        val deltas = diffTrees(old, emptyList())
+        assertEquals(2, deltas.size)
+        assertTrue(deltas.all { it.status == DiffStatus.DELETED })
+    }
+
+    @Test
+    fun testDiffMixedChanges() {
+        val oid1 = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        val oid2 = "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        val old = listOf(
+            treeEntry("a.txt", oid1, FileMode.BLOB),
+            treeEntry("b.txt", oid1, FileMode.BLOB),
+            treeEntry("c.txt", oid1, FileMode.BLOB),
+        )
+        val new = listOf(
+            treeEntry("a.txt", oid1, FileMode.BLOB), // unchanged
+            treeEntry("b.txt", oid2, FileMode.BLOB), // modified
+            treeEntry("d.txt", oid1, FileMode.BLOB), // added
+        )
+        val deltas = diffTrees(old, new)
+        assertEquals(3, deltas.size)
+        assertEquals(DiffStatus.MODIFIED, deltas[0].status)
+        assertEquals("b.txt", deltas[0].path)
+        assertEquals(DiffStatus.DELETED, deltas[1].status)
+        assertEquals("c.txt", deltas[1].path)
+        assertEquals(DiffStatus.ADDED, deltas[2].status)
+        assertEquals("d.txt", deltas[2].path)
+    }
 }
