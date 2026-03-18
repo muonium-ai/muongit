@@ -1,0 +1,11 @@
+[package]
+name = "muongit"
+version = "0.1.0"
+edition = "2021"
+description = "Native Rust port of libgit2"
+license = "MIT"
+repository = "https://github.com/muonium-ai/muongit"
+
+[dependencies]
+
+[dev-dependencies]

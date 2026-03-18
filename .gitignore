@@ -60,3 +60,20 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# Rust
+rust/target/
+
+# Kotlin
+kotlin/build/
+kotlin/.gradle/
+kotlin/gradle/
+kotlin/gradlew
+kotlin/gradlew.bat
+
+# Swift
+swift/.build/
+swift/.swiftpm/
+
+# MuonTickets
+tickets/mt/muontickets/.muontickets.db
