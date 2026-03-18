@@ -1360,6 +1360,40 @@ final class MuonGitTests: XCTestCase {
         XCTAssertFalse(oid.isZero)
     }
 
+    func testConformanceSHA256Vectors() {
+        // Vector 1: empty string
+        let d1 = SHA256Hash.hash([UInt8]())
+        XCTAssertEqual(d1.map { String(format: "%02x", $0) }.joined(), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+
+        // Vector 2: "hello"
+        let d2 = SHA256Hash.hash(Array("hello".utf8))
+        XCTAssertEqual(d2.map { String(format: "%02x", $0) }.joined(), "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+
+        // Vector 3: longer string
+        let d3 = SHA256Hash.hash(Array("The quick brown fox jumps over the lazy dog".utf8))
+        XCTAssertEqual(d3.map { String(format: "%02x", $0) }.joined(), "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592")
+    }
+
+    func testConformanceSHA256BlobOID() {
+        let oid1 = OID.hashSHA256(type: .blob, data: Array("hello\n".utf8))
+        XCTAssertEqual(oid1.hex.count, 64)
+        XCTAssertFalse(oid1.isZero)
+
+        let oid2 = OID.hashSHA256(type: .blob, data: [UInt8]())
+        XCTAssertEqual(oid2.hex.count, 64)
+
+        // SHA-256 and SHA-1 should produce different OIDs
+        let oidSha1 = OID.hash(type: .blob, data: Array("hello\n".utf8))
+        XCTAssertNotEqual(oid1.hex, oidSha1.hex)
+    }
+
+    func testConformanceHashAlgorithm() {
+        XCTAssertEqual(HashAlgorithm.sha1.digestLength, 20)
+        XCTAssertEqual(HashAlgorithm.sha256.digestLength, 32)
+        XCTAssertEqual(HashAlgorithm.sha1.hexLength, 40)
+        XCTAssertEqual(HashAlgorithm.sha256.hexLength, 64)
+    }
+
     func testConformanceSignatureFormat() {
         // Positive offset
         let sig1 = Signature(name: "Test User", email: "test@example.com", time: 1234567890, offset: 330)
@@ -1397,6 +1431,43 @@ final class MuonGitTests: XCTestCase {
         let delta3: [UInt8] = [11, 11, cmd3, 0, 5, 6] + Array(" world".utf8)
         let result3 = try applyDelta(base: base3, delta: delta3)
         XCTAssertEqual(String(bytes: result3, encoding: .utf8), "hello world")
+    }
+
+    // SHA-256 Tests
+
+    func testSHA256Empty() {
+        let digest = SHA256Hash.hash([UInt8]())
+        XCTAssertEqual(digest.map { String(format: "%02x", $0) }.joined(), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    }
+
+    func testSHA256Hello() {
+        let digest = SHA256Hash.hash(Array("hello".utf8))
+        XCTAssertEqual(digest.map { String(format: "%02x", $0) }.joined(), "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+    }
+
+    func testSHA256GitBlob() {
+        let data = Array("hello\n".utf8)
+        let oid = OID.hashSHA256(type: .blob, data: data)
+        XCTAssertEqual(oid.hex.count, 64)
+        XCTAssertFalse(oid.isZero)
+    }
+
+    func testSHA256Longer() {
+        let digest = SHA256Hash.hash(Array("The quick brown fox jumps over the lazy dog".utf8))
+        XCTAssertEqual(digest.map { String(format: "%02x", $0) }.joined(), "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592")
+    }
+
+    func testHashAlgorithm() {
+        XCTAssertEqual(HashAlgorithm.sha1.digestLength, 20)
+        XCTAssertEqual(HashAlgorithm.sha256.digestLength, 32)
+        XCTAssertEqual(HashAlgorithm.sha1.hexLength, 40)
+        XCTAssertEqual(HashAlgorithm.sha256.hexLength, 64)
+    }
+
+    func testZeroSHA256() {
+        let z = OID.zeroSHA256
+        XCTAssertTrue(z.isZero)
+        XCTAssertEqual(z.hex.count, 64)
     }
 
     func testConformanceIndexRoundTrip() throws {

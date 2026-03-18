@@ -4,6 +4,7 @@
 
 use muongit::*;
 use muongit::sha1::SHA1;
+use muongit::sha256::{SHA256, HashAlgorithm};
 use muongit::commit::{serialize_commit, parse_commit};
 use muongit::tree::{TreeEntry, file_mode, serialize_tree, parse_tree};
 use muongit::tag::{serialize_tag, parse_tag};
@@ -163,6 +164,43 @@ fn conformance_index_round_trip() {
     assert_eq!(loaded.entries[1].mode, 0o100755);
 
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn conformance_sha256_vectors() {
+    // Vector 1: empty string
+    let d1 = SHA256::hash(b"");
+    assert_eq!(hex(&d1), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+
+    // Vector 2: "hello"
+    let d2 = SHA256::hash(b"hello");
+    assert_eq!(hex(&d2), "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+
+    // Vector 3: longer string
+    let d3 = SHA256::hash(b"The quick brown fox jumps over the lazy dog");
+    assert_eq!(hex(&d3), "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592");
+}
+
+#[test]
+fn conformance_sha256_blob_oid() {
+    let oid1 = OID::hash_object_sha256(ObjectType::Blob, b"hello\n");
+    assert_eq!(oid1.hex().len(), 64);
+    assert!(!oid1.is_zero());
+
+    let oid2 = OID::hash_object_sha256(ObjectType::Blob, b"");
+    assert_eq!(oid2.hex().len(), 64);
+
+    // SHA-256 and SHA-1 should produce different OIDs
+    let oid_sha1 = OID::hash_object(ObjectType::Blob, b"hello\n");
+    assert_ne!(oid1.hex(), oid_sha1.hex());
+}
+
+#[test]
+fn conformance_hash_algorithm() {
+    assert_eq!(HashAlgorithm::SHA1.digest_length(), 20);
+    assert_eq!(HashAlgorithm::SHA256.digest_length(), 32);
+    assert_eq!(HashAlgorithm::SHA1.hex_length(), 40);
+    assert_eq!(HashAlgorithm::SHA256.hex_length(), 64);
 }
 
 fn hex(bytes: &[u8]) -> String {

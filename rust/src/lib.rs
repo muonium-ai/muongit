@@ -5,6 +5,7 @@ pub mod oid;
 pub mod types;
 pub mod error;
 pub mod sha1;
+pub mod sha256;
 pub mod repository;
 pub mod odb;
 pub mod refs;

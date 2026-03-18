@@ -1512,6 +1512,43 @@ class MuonGitTest {
     }
 
     @Test
+    fun testConformanceSHA256Vectors() {
+        // Vector 1: empty string
+        val d1 = SHA256Hash.hash(byteArrayOf())
+        assertEquals("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", d1.joinToString("") { "%02x".format(it) })
+
+        // Vector 2: "hello"
+        val d2 = SHA256Hash.hash("hello")
+        assertEquals("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", d2.joinToString("") { "%02x".format(it) })
+
+        // Vector 3: longer string
+        val d3 = SHA256Hash.hash("The quick brown fox jumps over the lazy dog")
+        assertEquals("d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592", d3.joinToString("") { "%02x".format(it) })
+    }
+
+    @Test
+    fun testConformanceSHA256BlobOID() {
+        val oid1 = OID.hashObjectSHA256(ObjectType.BLOB, "hello\n".toByteArray())
+        assertEquals(64, oid1.hex.length)
+        assertTrue(!oid1.isZero)
+
+        val oid2 = OID.hashObjectSHA256(ObjectType.BLOB, byteArrayOf())
+        assertEquals(64, oid2.hex.length)
+
+        // SHA-256 and SHA-1 should produce different OIDs
+        val oidSha1 = OID.hashObject(ObjectType.BLOB, "hello\n".toByteArray())
+        assertTrue(oid1.hex != oidSha1.hex)
+    }
+
+    @Test
+    fun testConformanceHashAlgorithm() {
+        assertEquals(20, HashAlgorithm.SHA1.digestLength)
+        assertEquals(32, HashAlgorithm.SHA256.digestLength)
+        assertEquals(40, HashAlgorithm.SHA1.hexLength)
+        assertEquals(64, HashAlgorithm.SHA256.hexLength)
+    }
+
+    @Test
     fun testConformanceSignatureFormat() {
         // Positive offset
         val sig1 = Signature(name = "Test User", email = "test@example.com", time = 1234567890L, offset = 330)
@@ -1545,6 +1582,49 @@ class MuonGitTest {
         val delta3 = byteArrayOf(11, 11, (0x80 or 0x01 or 0x10).toByte(), 0, 5, 6) + " world".toByteArray()
         val result3 = applyDelta(base3, delta3)
         assertEquals("hello world", String(result3))
+    }
+
+    // SHA-256 Tests
+
+    @Test
+    fun testSHA256Empty() {
+        val digest = SHA256Hash.hash(byteArrayOf())
+        assertEquals("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", digest.joinToString("") { "%02x".format(it) })
+    }
+
+    @Test
+    fun testSHA256Hello() {
+        val digest = SHA256Hash.hash("hello")
+        assertEquals("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", digest.joinToString("") { "%02x".format(it) })
+    }
+
+    @Test
+    fun testSHA256GitBlob() {
+        val data = "hello\n".toByteArray()
+        val oid = OID.hashObjectSHA256(ObjectType.BLOB, data)
+        assertEquals(64, oid.hex.length)
+        assertTrue(!oid.isZero)
+    }
+
+    @Test
+    fun testSHA256Longer() {
+        val digest = SHA256Hash.hash("The quick brown fox jumps over the lazy dog")
+        assertEquals("d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592", digest.joinToString("") { "%02x".format(it) })
+    }
+
+    @Test
+    fun testHashAlgorithm() {
+        assertEquals(20, HashAlgorithm.SHA1.digestLength)
+        assertEquals(32, HashAlgorithm.SHA256.digestLength)
+        assertEquals(40, HashAlgorithm.SHA1.hexLength)
+        assertEquals(64, HashAlgorithm.SHA256.hexLength)
+    }
+
+    @Test
+    fun testZeroSHA256() {
+        val z = OID.ZERO_SHA256
+        assertTrue(z.isZero)
+        assertEquals(64, z.hex.length)
     }
 
     @Test
