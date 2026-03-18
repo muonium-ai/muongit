@@ -270,4 +270,89 @@ final class MuonGitTests: XCTestCase {
         let refMap = Dictionary(uniqueKeysWithValues: refs)
         XCTAssertEqual(refMap["refs/tags/v1.0"], looseOid)
     }
+
+    // MARK: - Commit Tests
+
+    func testParseAndSerializeCommit() throws {
+        let treeId = OID(hex: "4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        let author = Signature(name: "Author", email: "author@example.com", time: 1234567890, offset: 0)
+        let committer = Signature(name: "Committer", email: "committer@example.com", time: 1234567890, offset: 0)
+
+        let data = serializeCommit(treeId: treeId, parentIds: [], author: author, committer: committer, message: "Initial commit\n")
+        let oid = OID.hash(type: .commit, data: Array(data))
+        let commit = try parseCommit(oid: oid, data: data)
+
+        XCTAssertEqual(commit.treeId, treeId)
+        XCTAssertTrue(commit.parentIds.isEmpty)
+        XCTAssertEqual(commit.author.name, "Author")
+        XCTAssertEqual(commit.committer.email, "committer@example.com")
+        XCTAssertEqual(commit.message, "Initial commit\n")
+        XCTAssertNil(commit.messageEncoding)
+    }
+
+    func testCommitWithParents() throws {
+        let treeId = OID(hex: "4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        let parent1 = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let parent2 = OID(hex: "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let sig = Signature(name: "Test", email: "test@test.com")
+
+        let data = serializeCommit(treeId: treeId, parentIds: [parent1, parent2], author: sig, committer: sig, message: "merge\n")
+        let oid = OID.hash(type: .commit, data: Array(data))
+        let commit = try parseCommit(oid: oid, data: data)
+
+        XCTAssertEqual(commit.parentIds.count, 2)
+        XCTAssertEqual(commit.parentIds[0], parent1)
+        XCTAssertEqual(commit.parentIds[1], parent2)
+    }
+
+    func testCommitMissingTreeThrows() {
+        let raw = Data("author Test <t@t.com> 0 +0000\ncommitter Test <t@t.com> 0 +0000\n\nmsg\n".utf8)
+        XCTAssertThrowsError(try parseCommit(oid: OID.zero, data: raw))
+    }
+
+    func testCommitWithEncoding() throws {
+        let treeId = OID(hex: "4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        let sig = Signature(name: "Test", email: "test@test.com", time: 100)
+
+        let data = serializeCommit(treeId: treeId, parentIds: [], author: sig, committer: sig, message: "msg\n", messageEncoding: "UTF-8")
+        let oid = OID.hash(type: .commit, data: Array(data))
+        let commit = try parseCommit(oid: oid, data: data)
+
+        XCTAssertEqual(commit.messageEncoding, "UTF-8")
+    }
+
+    func testSignatureParsing() {
+        let sig = parseSignature("Test User <test@example.com> 1234567890 +0530")
+        XCTAssertEqual(sig.name, "Test User")
+        XCTAssertEqual(sig.email, "test@example.com")
+        XCTAssertEqual(sig.time, 1234567890)
+        XCTAssertEqual(sig.offset, 330) // 5*60+30
+    }
+
+    func testSignatureFormatNegativeOffset() {
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1000, offset: -480)
+        let formatted = formatSignature(sig)
+        XCTAssertEqual(formatted, "Test <test@test.com> 1000 -0800")
+    }
+
+    func testCommitODBRoundTrip() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_commit_odb"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let treeId = OID(hex: "4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1234567890, offset: 0)
+
+        let commitData = serializeCommit(treeId: treeId, parentIds: [], author: sig, committer: sig, message: "test\n")
+        let oid = try writeLooseObject(gitDir: repo.gitDir, type: .commit, data: commitData)
+
+        let (readType, readData) = try readLooseObject(gitDir: repo.gitDir, oid: oid)
+        XCTAssertEqual(readType, .commit)
+
+        let commit = try parseCommit(oid: oid, data: readData)
+        XCTAssertEqual(commit.treeId, treeId)
+        XCTAssertEqual(commit.author.name, "Test")
+        XCTAssertEqual(commit.message, "test\n")
+    }
 }

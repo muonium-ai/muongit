@@ -8,6 +8,7 @@ pub mod sha1;
 pub mod repository;
 pub mod odb;
 pub mod refs;
+pub mod commit;
 
 pub use oid::OID;
 pub use types::{ObjectType, Signature};

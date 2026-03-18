@@ -3,7 +3,9 @@ package ai.muonium.muongit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
 
 class MuonGitTest {
     @Test
@@ -307,6 +309,102 @@ class MuonGitTest {
             val refs = listReferences(repo.gitDir)
             val refMap = refs.toMap()
             assertEquals(looseOid, refMap["refs/tags/v1.0"])
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    // Commit Tests
+
+    @Test
+    fun testParseAndSerializeCommit() {
+        val treeId = OID("4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        val author = Signature(name = "Author", email = "author@example.com", time = 1234567890L, offset = 0)
+        val committer = Signature(name = "Committer", email = "committer@example.com", time = 1234567890L, offset = 0)
+
+        val data = serializeCommit(treeId, emptyList(), author, committer, "Initial commit\n")
+        val oid = OID.hashObject(ObjectType.COMMIT, data)
+        val commit = parseCommit(oid, data)
+
+        assertEquals(treeId, commit.treeId)
+        assertTrue(commit.parentIds.isEmpty())
+        assertEquals("Author", commit.author.name)
+        assertEquals("committer@example.com", commit.committer.email)
+        assertEquals("Initial commit\n", commit.message)
+        assertNull(commit.messageEncoding)
+    }
+
+    @Test
+    fun testCommitWithParents() {
+        val treeId = OID("4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        val parent1 = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val parent2 = OID("bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val sig = Signature(name = "Test", email = "test@test.com")
+
+        val data = serializeCommit(treeId, listOf(parent1, parent2), sig, sig, "merge\n")
+        val oid = OID.hashObject(ObjectType.COMMIT, data)
+        val commit = parseCommit(oid, data)
+
+        assertEquals(2, commit.parentIds.size)
+        assertEquals(parent1, commit.parentIds[0])
+        assertEquals(parent2, commit.parentIds[1])
+    }
+
+    @Test
+    fun testCommitMissingTreeThrows() {
+        val raw = "author Test <t@t.com> 0 +0000\ncommitter Test <t@t.com> 0 +0000\n\nmsg\n".toByteArray()
+        assertFailsWith<MuonGitException.InvalidObject> {
+            parseCommit(OID.ZERO, raw)
+        }
+    }
+
+    @Test
+    fun testCommitWithEncoding() {
+        val treeId = OID("4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        val sig = Signature(name = "Test", email = "test@test.com", time = 100L)
+
+        val data = serializeCommit(treeId, emptyList(), sig, sig, "msg\n", "UTF-8")
+        val oid = OID.hashObject(ObjectType.COMMIT, data)
+        val commit = parseCommit(oid, data)
+
+        assertEquals("UTF-8", commit.messageEncoding)
+    }
+
+    @Test
+    fun testSignatureParsing() {
+        val sig = parseSignatureLine("Test User <test@example.com> 1234567890 +0530")
+        assertEquals("Test User", sig.name)
+        assertEquals("test@example.com", sig.email)
+        assertEquals(1234567890L, sig.time)
+        assertEquals(330, sig.offset) // 5*60+30
+    }
+
+    @Test
+    fun testSignatureFormatNegativeOffset() {
+        val sig = Signature(name = "Test", email = "test@test.com", time = 1000L, offset = -480)
+        val formatted = formatSignatureLine(sig)
+        assertEquals("Test <test@test.com> 1000 -0800", formatted)
+    }
+
+    @Test
+    fun testCommitODBRoundTrip() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_commit_odb")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val treeId = OID("4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+            val sig = Signature(name = "Test", email = "test@test.com", time = 1234567890L, offset = 0)
+
+            val commitData = serializeCommit(treeId, emptyList(), sig, sig, "test\n")
+            val oid = writeLooseObject(repo.gitDir, ObjectType.COMMIT, commitData)
+
+            val (readType, readData) = readLooseObject(repo.gitDir, oid)
+            assertEquals(ObjectType.COMMIT, readType)
+
+            val commit = parseCommit(oid, readData)
+            assertEquals(treeId, commit.treeId)
+            assertEquals("Test", commit.author.name)
+            assertEquals("test\n", commit.message)
         } finally {
             tmp.deleteRecursively()
         }
