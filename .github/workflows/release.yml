@@ -49,6 +49,9 @@ jobs:
         run: |
           mkdir -p staging
           cp target/release/muongit-bench staging/
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            codesign -s - staging/muongit-bench
+          fi
           cp target/release/libmuongit.rlib staging/ 2>/dev/null || true
           cp target/release/libmuongit.a staging/ 2>/dev/null || true
           cp target/release/libmuongit.so staging/ 2>/dev/null || true
@@ -74,6 +77,7 @@ jobs:
         run: |
           mkdir -p staging
           cp .build/release/muongit-bench staging/
+          codesign -s - staging/muongit-bench
           cp .build/release/Modules/MuonGit.swiftmodule staging/ 2>/dev/null || true
           cp .build/release/Modules/MuonGit.swiftdoc staging/ 2>/dev/null || true
           cp .build/release/Modules/MuonGit.abi.json staging/ 2>/dev/null || true
