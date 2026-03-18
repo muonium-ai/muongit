@@ -26,6 +26,11 @@ let package = Package(
             name: "MuonGitTests",
             dependencies: ["MuonGit"],
             path: "tests"
+        ),
+        .executableTarget(
+            name: "muongit-bench",
+            dependencies: ["MuonGit"],
+            path: "bench"
         )
     ]
 )

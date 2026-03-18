@@ -1,5 +1,6 @@
 plugins {
     kotlin("jvm") version "2.1.10"
+    application
 }
 
 group = "ai.muonium"
@@ -48,6 +49,11 @@ sourceSets {
     test {
         kotlin.srcDir("src/test/kotlin")
     }
+    create("bench") {
+        kotlin.srcDir("src/bench/kotlin")
+        compileClasspath += sourceSets.main.get().output + sourceSets.main.get().compileClasspath
+        runtimeClasspath += sourceSets.main.get().output + sourceSets.main.get().runtimeClasspath
+    }
 }
 
 tasks.named("compileKotlin") { dependsOn(generateVersion) }
@@ -58,4 +64,10 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+tasks.register<JavaExec>("bench") {
+    description = "Run MuonGit benchmarks"
+    mainClass.set("ai.muonium.muongit.BenchmarkKt")
+    classpath = sourceSets["bench"].runtimeClasspath
 }
