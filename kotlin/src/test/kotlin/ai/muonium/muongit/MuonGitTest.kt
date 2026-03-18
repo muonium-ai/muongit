@@ -1650,4 +1650,627 @@ class MuonGitTest {
             tmp.deleteRecursively()
         }
     }
+
+    // ============================================================
+    // Parity tests (libgit2 test suite)
+    // ============================================================
+
+    // OID parity (libgit2 core/oid.c)
+
+    @Test
+    fun testParityOIDFromValidHex() {
+        val hex = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        val oid = OID(hex)
+        assertEquals(hex, oid.hex)
+    }
+
+    @Test
+    fun testParityOIDZeroIsZero() {
+        val oid = OID.ZERO
+        assertTrue(oid.isZero)
+    }
+
+    @Test
+    fun testParityOIDNonzeroIsNotZero() {
+        val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        assertTrue(!oid.isZero)
+    }
+
+    @Test
+    fun testParityOIDEquality() {
+        val a = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val b = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val c = OID("bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        assertEquals(a, b)
+        assertTrue(a != c)
+    }
+
+    @Test
+    fun testParityOIDSHA256Roundtrip() {
+        val data = "hello sha256".toByteArray()
+        val oid = OID.hashObjectSHA256(ObjectType.BLOB, data)
+        assertEquals(64, oid.hex.length)
+        assertEquals(32, oid.raw.size)
+    }
+
+    @Test
+    fun testParityOIDSHA1vsSHA256Different() {
+        val data = "test data".toByteArray()
+        val sha1 = OID.hashObject(ObjectType.BLOB, data)
+        val sha256 = OID.hashObjectSHA256(ObjectType.BLOB, data)
+        assertTrue(sha1.hex != sha256.hex)
+        assertEquals(40, sha1.hex.length)
+        assertEquals(64, sha256.hex.length)
+    }
+
+    @Test
+    fun testParityHashAlgorithmProperties() {
+        assertEquals(20, HashAlgorithm.SHA1.digestLength)
+        assertEquals(40, HashAlgorithm.SHA1.hexLength)
+        assertEquals(32, HashAlgorithm.SHA256.digestLength)
+        assertEquals(64, HashAlgorithm.SHA256.hexLength)
+    }
+
+    // Signature parity (libgit2 commit/signature.c)
+
+    @Test
+    fun testParitySignaturePositiveOffset() {
+        val sig = Signature(name = "Test", email = "t@t", time = 1000000, offset = 330)
+        val line = formatSignatureLine(sig)
+        assertTrue(line.contains("+0530"))
+    }
+
+    @Test
+    fun testParitySignatureNegativeOffset() {
+        val sig = Signature(name = "Test", email = "t@t", time = 1000000, offset = -480)
+        val line = formatSignatureLine(sig)
+        assertTrue(line.contains("-0800"))
+    }
+
+    @Test
+    fun testParitySignatureZeroOffset() {
+        val sig = Signature(name = "Test", email = "t@t", time = 1000000, offset = 0)
+        val line = formatSignatureLine(sig)
+        assertTrue(line.contains("+0000"))
+    }
+
+    @Test
+    fun testParitySignatureLargeOffset() {
+        val sig = Signature(name = "Test", email = "t@t", time = 1000000, offset = 765)
+        val line = formatSignatureLine(sig)
+        assertTrue(line.contains("+1245"))
+    }
+
+    @Test
+    fun testParitySignatureSingleCharName() {
+        val sig = Signature(name = "X", email = "x@x", time = 0, offset = 0)
+        val line = formatSignatureLine(sig)
+        assertTrue(line.startsWith("X <x@x>"))
+    }
+
+    // Commit parity (libgit2 object/validate.c)
+
+    @Test
+    fun testParityCommitNoParents() {
+        val treeId = OID("4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        val sig = Signature(name = "A", email = "a@a", time = 1000000, offset = 0)
+        val data = serializeCommit(treeId = treeId, parentIds = emptyList(), author = sig, committer = sig, message = "init\n")
+        val oid = OID.hashObject(ObjectType.COMMIT, data)
+        val parsed = parseCommit(oid, data)
+        assertEquals(treeId, parsed.treeId)
+        assertTrue(parsed.parentIds.isEmpty())
+        assertEquals("A", parsed.author.name)
+        assertEquals("init\n", parsed.message)
+    }
+
+    @Test
+    fun testParityCommitMultipleParents() {
+        val treeId = OID("4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        val p1 = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val p2 = OID("bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val sig = Signature(name = "M", email = "m@m", time = 1000000, offset = 0)
+        val data = serializeCommit(treeId = treeId, parentIds = listOf(p1, p2), author = sig, committer = sig, message = "merge\n")
+        val oid = OID.hashObject(ObjectType.COMMIT, data)
+        val parsed = parseCommit(oid, data)
+        assertEquals(2, parsed.parentIds.size)
+        assertEquals(p1, parsed.parentIds[0])
+        assertEquals(p2, parsed.parentIds[1])
+    }
+
+    @Test
+    fun testParityCommitWithEncoding() {
+        val treeId = OID("4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        val sig = Signature(name = "E", email = "e@e", time = 1000000, offset = 0)
+        val data = serializeCommit(treeId = treeId, parentIds = emptyList(), author = sig, committer = sig, message = "enc\n", messageEncoding = "ISO-8859-1")
+        val oid = OID.hashObject(ObjectType.COMMIT, data)
+        val parsed = parseCommit(oid, data)
+        assertEquals("ISO-8859-1", parsed.messageEncoding)
+    }
+
+    @Test
+    fun testParityCommitRoundtripPreservesOID() {
+        val treeId = OID("4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        val parent = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val sig = Signature(name = "R", email = "r@r", time = 1000000, offset = 60)
+        val data1 = serializeCommit(treeId = treeId, parentIds = listOf(parent), author = sig, committer = sig, message = "roundtrip\n")
+        val oid1 = OID.hashObject(ObjectType.COMMIT, data1)
+        val parsed = parseCommit(oid1, data1)
+        val data2 = serializeCommit(treeId = parsed.treeId, parentIds = parsed.parentIds, author = parsed.author, committer = parsed.committer, message = parsed.message, messageEncoding = parsed.messageEncoding)
+        val oid2 = OID.hashObject(ObjectType.COMMIT, data2)
+        assertEquals(oid1, oid2)
+    }
+
+    // Tree parity (libgit2 object/tree/parse.c)
+
+    @Test
+    fun testParityTreeEmpty() {
+        val data = serializeTree(emptyList())
+        assertTrue(data.isEmpty())
+        val oid = OID.hashObject(ObjectType.TREE, data)
+        val parsed = parseTree(oid, data)
+        assertTrue(parsed.entries.isEmpty())
+        val oid2 = OID.hashObject(ObjectType.TREE, ByteArray(0))
+        assertEquals(oid, oid2)
+    }
+
+    @Test
+    fun testParityTreeSingleBlob() {
+        val blobOid = OID("ae90f12eea699729ed24555e40b9fd669da12a12")
+        val entries = listOf(TreeEntry(mode = FileMode.BLOB, name = "foo", oid = blobOid))
+        val data = serializeTree(entries)
+        val parsed = parseTree(OID.ZERO, data)
+        assertEquals(1, parsed.entries.size)
+        assertEquals("foo", parsed.entries[0].name)
+        assertEquals(FileMode.BLOB, parsed.entries[0].mode)
+        assertEquals(blobOid, parsed.entries[0].oid)
+    }
+
+    @Test
+    fun testParityTreeSingleSubtree() {
+        val treeOid = OID("ae90f12eea699729ed24555e40b9fd669da12a12")
+        val entries = listOf(TreeEntry(mode = FileMode.TREE, name = "subdir", oid = treeOid))
+        val data = serializeTree(entries)
+        val parsed = parseTree(OID.ZERO, data)
+        assertEquals(1, parsed.entries.size)
+        assertTrue(parsed.entries[0].isTree)
+        assertTrue(!parsed.entries[0].isBlob)
+    }
+
+    @Test
+    fun testParityTreeMultipleModes() {
+        val oid1 = OID("ae90f12eea699729ed24555e40b9fd669da12a12")
+        val oid2 = OID("e8bfe5af39579a7e4898bb23f3a76a72c368cee6")
+        val entries = listOf(
+            TreeEntry(mode = FileMode.BLOB, name = "file.txt", oid = oid1),
+            TreeEntry(mode = FileMode.BLOB_EXE, name = "run.sh", oid = oid2),
+            TreeEntry(mode = FileMode.LINK, name = "sym", oid = oid1),
+            TreeEntry(mode = FileMode.TREE, name = "dir", oid = oid2),
+        )
+        val data = serializeTree(entries)
+        val parsed = parseTree(OID.ZERO, data)
+        assertEquals(4, parsed.entries.size)
+        assertEquals("dir", parsed.entries[0].name)
+        assertEquals(FileMode.TREE, parsed.entries[0].mode)
+        assertEquals("file.txt", parsed.entries[1].name)
+        assertEquals("run.sh", parsed.entries[2].name)
+        assertEquals("sym", parsed.entries[3].name)
+    }
+
+    @Test
+    fun testParityTreeRoundtripPreservesOID() {
+        val oid = OID("ce013625030ba8dba906f756967f9e9ca394464a")
+        val entries = listOf(
+            TreeEntry(mode = FileMode.BLOB, name = "hello.txt", oid = oid),
+            TreeEntry(mode = FileMode.BLOB_EXE, name = "script.sh", oid = oid),
+        )
+        val data1 = serializeTree(entries)
+        val treeOid1 = OID.hashObject(ObjectType.TREE, data1)
+        val parsed = parseTree(treeOid1, data1)
+        val data2 = serializeTree(parsed.entries)
+        val treeOid2 = OID.hashObject(ObjectType.TREE, data2)
+        assertEquals(treeOid1, treeOid2)
+    }
+
+    // Tag parity
+
+    @Test
+    fun testParityTagTargetingDifferentTypes() {
+        val target = OID("ae90f12eea699729ed24555e40b9fd669da12a12")
+        val tagger = Signature(name = "T", email = "t@t", time = 0, offset = 0)
+        for (objType in listOf(ObjectType.COMMIT, ObjectType.TREE, ObjectType.BLOB)) {
+            val data = serializeTag(targetId = target, targetType = objType, tagName = "v1.0", tagger = tagger, message = "tag msg\n")
+            val oid = OID.hashObject(ObjectType.TAG, data)
+            val parsed = parseTag(oid, data)
+            assertEquals(objType, parsed.targetType)
+            assertEquals("v1.0", parsed.tagName)
+        }
+    }
+
+    @Test
+    fun testParityTagWithoutTagger() {
+        val target = OID("ae90f12eea699729ed24555e40b9fd669da12a12")
+        val data = serializeTag(targetId = target, targetType = ObjectType.COMMIT, tagName = "lightweight", tagger = null, message = "no tagger\n")
+        val oid = OID.hashObject(ObjectType.TAG, data)
+        val parsed = parseTag(oid, data)
+        assertNull(parsed.tagger)
+        assertEquals("lightweight", parsed.tagName)
+    }
+
+    // Config parity (libgit2 config/read.c)
+
+    @Test
+    fun testParityConfigBooleanValues() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_parity_cfg_bool")
+        tmp.mkdirs()
+        try {
+            val cfgFile = java.io.File(tmp, "config")
+            cfgFile.writeText("[core]\n\tfilemode = true\n\tbare = false\n\tyes = yes\n\tno = no\n\ton = on\n\toff = off\n\tone = 1\n\tzero = 0\n")
+            val cfg = Config.load(cfgFile.path)
+            assertEquals(true, cfg.getBool("core", "filemode"))
+            assertEquals(false, cfg.getBool("core", "bare"))
+            assertEquals(true, cfg.getBool("core", "yes"))
+            assertEquals(false, cfg.getBool("core", "no"))
+            assertEquals(true, cfg.getBool("core", "on"))
+            assertEquals(false, cfg.getBool("core", "off"))
+            assertEquals(true, cfg.getBool("core", "one"))
+            assertEquals(false, cfg.getBool("core", "zero"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testParityConfigIntSuffixes() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_parity_cfg_int")
+        tmp.mkdirs()
+        try {
+            val cfgFile = java.io.File(tmp, "config")
+            cfgFile.writeText("[core]\n\tplain = 42\n\tkilo = 2k\n\tmega = 3m\n\tgiga = 1g\n")
+            val cfg = Config.load(cfgFile.path)
+            assertEquals(42, cfg.getInt("core", "plain"))
+            assertEquals(2048, cfg.getInt("core", "kilo"))
+            assertEquals(3145728, cfg.getInt("core", "mega"))
+            assertEquals(1073741824, cfg.getInt("core", "giga"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testParityConfigCaseInsensitive() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_parity_cfg_case")
+        tmp.mkdirs()
+        try {
+            val cfgFile = java.io.File(tmp, "config")
+            cfgFile.writeText("[Core]\n\tFileMode = true\n")
+            val cfg = Config.load(cfgFile.path)
+            assertEquals(true, cfg.getBool("core", "filemode"))
+            assertEquals(true, cfg.getBool("CORE", "FILEMODE"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testParityConfigComments() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_parity_cfg_comments")
+        tmp.mkdirs()
+        try {
+            val cfgFile = java.io.File(tmp, "config")
+            cfgFile.writeText("# comment\n[core]\n; another comment\n\tfilemode = true\n")
+            val cfg = Config.load(cfgFile.path)
+            assertEquals(true, cfg.getBool("core", "filemode"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    // Blob OID parity
+
+    @Test
+    fun testParityBlobEmptyOID() {
+        val oid = OID.hashObject(ObjectType.BLOB, ByteArray(0))
+        assertEquals("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391", oid.hex)
+    }
+
+    @Test
+    fun testParityBlobKnownContent() {
+        val oid = OID.hashObject(ObjectType.BLOB, "hello\n".toByteArray())
+        assertEquals("ce013625030ba8dba906f756967f9e9ca394464a", oid.hex)
+    }
+
+    @Test
+    fun testParityBlobNewlineOnly() {
+        val oid = OID.hashObject(ObjectType.BLOB, "\n".toByteArray())
+        assertEquals("8b137891791fe96927ad78e64b0aad7bded08bdc", oid.hex)
+    }
+
+    // Index parity
+
+    @Test
+    fun testParityIndexSortedByPath() {
+        val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val index = Index()
+        index.add(IndexEntry(mode = FileMode.BLOB, fileSize = 0, oid = oid, path = "z.txt"))
+        index.add(IndexEntry(mode = FileMode.BLOB, fileSize = 0, oid = oid, path = "a.txt"))
+        index.add(IndexEntry(mode = FileMode.BLOB, fileSize = 0, oid = oid, path = "m.txt"))
+        assertEquals("a.txt", index.entries[0].path)
+        assertEquals("m.txt", index.entries[1].path)
+        assertEquals("z.txt", index.entries[2].path)
+    }
+
+    @Test
+    fun testParityIndexDuplicatePathReplaces() {
+        val oid1 = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val oid2 = OID("bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val index = Index()
+        index.add(IndexEntry(mode = FileMode.BLOB, fileSize = 10, oid = oid1, path = "file.txt"))
+        index.add(IndexEntry(mode = FileMode.BLOB, fileSize = 20, oid = oid2, path = "file.txt"))
+        assertEquals(1, index.entries.size)
+        assertEquals(oid2, index.entries[0].oid)
+    }
+
+    @Test
+    fun testParityIndexManyEntriesRoundtrip() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_parity_idx_many")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            val index = Index()
+            for (i in 0 until 100) {
+                index.add(IndexEntry(mode = FileMode.BLOB, fileSize = i, oid = oid, path = "src/file_%04d.txt".format(i)))
+            }
+            writeIndex(repo.gitDir, index)
+            val loaded = readIndex(repo.gitDir)
+            assertEquals(100, loaded.entries.size)
+            assertEquals("src/file_0000.txt", loaded.entries[0].path)
+            assertEquals("src/file_0099.txt", loaded.entries[99].path)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    // Diff parity
+
+    @Test
+    fun testParityDiffSortedOutput() {
+        val oid1 = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val oid2 = OID("bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val old = listOf(
+            TreeEntry(mode = FileMode.BLOB, name = "a.txt", oid = oid1),
+            TreeEntry(mode = FileMode.BLOB, name = "c.txt", oid = oid1),
+            TreeEntry(mode = FileMode.BLOB, name = "e.txt", oid = oid1),
+        )
+        val new = listOf(
+            TreeEntry(mode = FileMode.BLOB, name = "b.txt", oid = oid2),
+            TreeEntry(mode = FileMode.BLOB, name = "c.txt", oid = oid2),
+            TreeEntry(mode = FileMode.BLOB, name = "d.txt", oid = oid2),
+        )
+        val deltas = diffTrees(old, new)
+        val paths = deltas.map { it.path }
+        assertEquals(listOf("a.txt", "b.txt", "c.txt", "d.txt", "e.txt"), paths)
+        assertEquals(DiffStatus.DELETED, deltas[0].status)
+        assertEquals(DiffStatus.ADDED, deltas[1].status)
+        assertEquals(DiffStatus.MODIFIED, deltas[2].status)
+        assertEquals(DiffStatus.ADDED, deltas[3].status)
+        assertEquals(DiffStatus.DELETED, deltas[4].status)
+    }
+
+    @Test
+    fun testParityDiffModeChangeIsModified() {
+        val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val old = listOf(TreeEntry(mode = FileMode.BLOB, name = "f", oid = oid))
+        val new = listOf(TreeEntry(mode = FileMode.BLOB_EXE, name = "f", oid = oid))
+        val deltas = diffTrees(old, new)
+        assertEquals(1, deltas.size)
+        assertEquals(DiffStatus.MODIFIED, deltas[0].status)
+    }
+
+    // Delta parity
+
+    @Test
+    fun testParityDeltaEmptyInsert() {
+        val base = "base".toByteArray()
+        val delta = byteArrayOf(4, 3, 3, 'a'.code.toByte(), 'b'.code.toByte(), 'c'.code.toByte())
+        val result = applyDelta(base, delta)
+        assertEquals("abc", result.decodeToString())
+    }
+
+    @Test
+    fun testParityDeltaInvalidOpcodeZero() {
+        val base = "base".toByteArray()
+        val delta = byteArrayOf(4, 4, 0)
+        assertFailsWith<Exception> { applyDelta(base, delta) }
+    }
+
+    // SHA NIST vectors
+
+    @Test
+    fun testParitySHA1NISTVectors() {
+        val digest = SHA1.hash("abc")
+        val hex = digest.joinToString("") { "%02x".format(it) }
+        assertEquals("a9993e364706816aba3e25717850c26c9cd0d89d", hex)
+    }
+
+    @Test
+    fun testParitySHA256NISTVectors() {
+        val digest = SHA256Hash.hash("abc")
+        val hex = digest.joinToString("") { "%02x".format(it) }
+        assertEquals("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", hex)
+    }
+
+    // Repository parity
+
+    @Test
+    fun testParityRepoInitCreatesStructure() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_parity_repo_init")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            assertTrue(repo.gitDir.exists())
+            assertTrue(java.io.File(repo.gitDir, "objects").isDirectory)
+            assertTrue(java.io.File(repo.gitDir, "refs").isDirectory)
+            assertTrue(java.io.File(repo.gitDir, "HEAD").exists())
+            val head = java.io.File(repo.gitDir, "HEAD").readText().trim()
+            assertTrue(head.startsWith("ref:"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testParityRepoInitBare() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_parity_repo_bare")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path, bare = true)
+            assertTrue(repo.isBare)
+            assertNull(repo.workdir)
+            assertTrue(java.io.File(repo.gitDir, "objects").isDirectory)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testParityRepoReinitPreserves() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_parity_repo_reinit")
+        tmp.deleteRecursively()
+        try {
+            val repo1 = Repository.init(tmp.path)
+            val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            val index = Index()
+            index.add(IndexEntry(mode = FileMode.BLOB, fileSize = 5, oid = oid, path = "test.txt"))
+            writeIndex(repo1.gitDir, index)
+            val repo2 = Repository.init(tmp.path)
+            val loaded = readIndex(repo2.gitDir)
+            assertEquals(1, loaded.entries.size)
+            assertEquals("test.txt", loaded.entries[0].path)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    // ============================================================
+    // Performance tests
+    // ============================================================
+
+    private fun measureMs(block: () -> Unit): Double {
+        val start = System.nanoTime()
+        block()
+        return (System.nanoTime() - start) / 1_000_000.0
+    }
+
+    @Test
+    fun testPerfSHA1Throughput1MB() {
+        val data = ByteArray(1_000_000) { 0xAB.toByte() }
+        val ms = measureMs { SHA1.hash(data) }
+        println("[perf] SHA-1 1MB: ${"%.2f".format(ms)}ms")
+        assertTrue(ms < 120000.0, "SHA-1 1MB took ${ms}ms, expected < 120000ms")
+    }
+
+    @Test
+    fun testPerfSHA256Throughput1MB() {
+        val data = ByteArray(1_000_000) { 0xAB.toByte() }
+        val ms = measureMs { SHA256Hash.hash(data) }
+        println("[perf] SHA-256 1MB: ${"%.2f".format(ms)}ms")
+        assertTrue(ms < 120000.0, "SHA-256 1MB took ${ms}ms, expected < 120000ms")
+    }
+
+    @Test
+    fun testPerfOIDCreation10K() {
+        val ms = measureMs {
+            for (i in 0 until 10_000) {
+                OID.hashObject(ObjectType.BLOB, "blob content $i".toByteArray())
+            }
+        }
+        println("[perf] OID creation 10K: ${"%.2f".format(ms)}ms")
+        assertTrue(ms < 5000.0, "OID creation 10K took ${ms}ms, expected < 5000ms")
+    }
+
+    @Test
+    fun testPerfTreeSerialize1KEntries() {
+        val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val entries = (0 until 1000).map { TreeEntry(mode = FileMode.BLOB, name = "file_%04d.txt".format(it), oid = oid) }
+        val ms = measureMs {
+            val data = serializeTree(entries)
+            parseTree(OID.ZERO, data)
+        }
+        println("[perf] Tree serialize+parse 1K: ${"%.2f".format(ms)}ms")
+        assertTrue(ms < 2000.0, "Tree 1K took ${ms}ms, expected < 2000ms")
+    }
+
+    @Test
+    fun testPerfCommitSerialize10K() {
+        val treeId = OID("4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        val sig = Signature(name = "Perf Test", email = "perf@test", time = 1000000, offset = 0)
+        val ms = measureMs {
+            for (i in 0 until 10_000) {
+                serializeCommit(treeId = treeId, parentIds = emptyList(), author = sig, committer = sig, message = "commit $i\n")
+            }
+        }
+        println("[perf] Commit serialize 10K: ${"%.2f".format(ms)}ms")
+        assertTrue(ms < 5000.0, "Commit serialize 10K took ${ms}ms, expected < 5000ms")
+    }
+
+    @Test
+    fun testPerfIndexReadWrite1K() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_perf_index")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            val index = Index()
+            for (i in 0 until 1000) {
+                index.add(IndexEntry(mode = FileMode.BLOB, fileSize = i, oid = oid, path = "src/file_%04d.txt".format(i)))
+            }
+            val ms = measureMs {
+                writeIndex(repo.gitDir, index)
+                readIndex(repo.gitDir)
+            }
+            println("[perf] Index write+read 1K: ${"%.2f".format(ms)}ms")
+            assertTrue(ms < 5000.0, "Index 1K took ${ms}ms, expected < 5000ms")
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testPerfDiffLargeTrees() {
+        val oid1 = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val oid2 = OID("bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val old = (0 until 1000).map { TreeEntry(mode = FileMode.BLOB, name = "file_%04d.txt".format(it), oid = oid1) }
+        val new = (0 until 1000).map { i ->
+            val oid = if (i % 10 == 0) oid2 else oid1
+            TreeEntry(mode = FileMode.BLOB, name = "file_%04d.txt".format(i), oid = oid)
+        }
+        val ms = measureMs {
+            val deltas = diffTrees(old, new)
+            assertEquals(100, deltas.size)
+        }
+        println("[perf] Diff 1K-entry trees: ${"%.2f".format(ms)}ms")
+        assertTrue(ms < 2000.0, "Diff 1K took ${ms}ms, expected < 2000ms")
+    }
+
+    @Test
+    fun testPerfBlobHashing10K() {
+        val ms = measureMs {
+            for (i in 0 until 10_000) {
+                OID.hashObject(ObjectType.BLOB, "line $i\nmore content here\n".toByteArray())
+            }
+        }
+        println("[perf] Blob hashing 10K: ${"%.2f".format(ms)}ms")
+        assertTrue(ms < 5000.0, "Blob hashing 10K took ${ms}ms, expected < 5000ms")
+    }
+
+    @Test
+    fun testPerfSHA1vsSHA256Comparison() {
+        val data = ByteArray(1_000_000) { 0xAB.toByte() }
+        val msSha1 = measureMs { SHA1.hash(data) }
+        val msSha256 = measureMs { SHA256Hash.hash(data) }
+        println("[perf] SHA-1 1MB: ${"%.2f".format(msSha1)}ms, SHA-256 1MB: ${"%.2f".format(msSha256)}ms, ratio: ${"%.2f".format(msSha256 / msSha1.coerceAtLeast(0.001))}x")
+        assertTrue(msSha1 < 120000.0)
+        assertTrue(msSha256 < 120000.0)
+    }
 }

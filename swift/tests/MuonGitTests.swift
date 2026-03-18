@@ -1485,10 +1485,549 @@ final class MuonGitTests: XCTestCase {
 
         let loaded = try readIndex(gitDir: repo.gitDir)
         XCTAssertEqual(loaded.entries.count, 2)
-        // Entries must be sorted
         XCTAssertEqual(loaded.entries[0].path, "hello.txt")
         XCTAssertEqual(loaded.entries[1].path, "script.sh")
         XCTAssertEqual(loaded.entries[0].mode, 0o100644)
         XCTAssertEqual(loaded.entries[1].mode, 0o100755)
+    }
+
+    // ── libgit2 Parity Tests ──
+
+    // OID parity (libgit2 core/oid.c)
+
+    func testParityOIDFromValidHex() {
+        let oid = OID(hex: "ae90f12eea699729ed24555e40b9fd669da12a12")
+        XCTAssertEqual(oid.hex, "ae90f12eea699729ed24555e40b9fd669da12a12")
+    }
+
+    func testParityOIDZeroIsZero() {
+        XCTAssertTrue(OID.zero.isZero)
+        XCTAssertEqual(OID.zero.hex, "0000000000000000000000000000000000000000")
+    }
+
+    func testParityOIDNonzeroIsNotZero() {
+        let oid = OID(hex: "ae90f12eea699729ed24555e40b9fd669da12a12")
+        XCTAssertFalse(oid.isZero)
+    }
+
+    func testParityOIDEquality() {
+        let a = OID(hex: "ae90f12eea699729ed24555e40b9fd669da12a12")
+        let b = OID(hex: "ae90f12eea699729ed24555e40b9fd669da12a12")
+        let c = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        XCTAssertEqual(a, b)
+        XCTAssertNotEqual(a, c)
+    }
+
+    func testParityOIDSHA256Roundtrip() {
+        let hex64 = "d3e63d2f2e43d1fee23a74bf19a0ede156cba2d1bd602eba13de433cea1bb512"
+        let oid = OID(hex: hex64)
+        XCTAssertEqual(oid.hex, hex64)
+        XCTAssertEqual(oid.raw.count, 32)
+    }
+
+    func testParityOIDSHA1vsSHA256Different() {
+        let data = Array("test content\n".utf8)
+        let sha1Oid = OID.hash(type: .blob, data: data)
+        let sha256Oid = OID.hashSHA256(type: .blob, data: data)
+        XCTAssertNotEqual(sha1Oid.hex, sha256Oid.hex)
+        XCTAssertEqual(sha1Oid.hex.count, 40)
+        XCTAssertEqual(sha256Oid.hex.count, 64)
+    }
+
+    func testParityHashAlgorithmProperties() {
+        XCTAssertEqual(HashAlgorithm.sha1.digestLength, 20)
+        XCTAssertEqual(HashAlgorithm.sha256.digestLength, 32)
+        XCTAssertEqual(HashAlgorithm.sha1.hexLength, 40)
+        XCTAssertEqual(HashAlgorithm.sha256.hexLength, 64)
+    }
+
+    // Signature parity (libgit2 commit/signature.c)
+
+    func testParitySignaturePositiveOffset() {
+        let sig = Signature(name: "Test User", email: "test@test.tt", time: 1461698487, offset: 120)
+        XCTAssertEqual(formatSignature(sig), "Test User <test@test.tt> 1461698487 +0200")
+    }
+
+    func testParitySignatureNegativeOffset() {
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1000, offset: -300)
+        XCTAssertEqual(formatSignature(sig), "Test <test@test.com> 1000 -0500")
+    }
+
+    func testParitySignatureZeroOffset() {
+        let sig = Signature(name: "A", email: "a@b.c", time: 0, offset: 0)
+        XCTAssertEqual(formatSignature(sig), "A <a@b.c> 0 +0000")
+    }
+
+    func testParitySignatureLargeOffset() {
+        let sig = Signature(name: "A", email: "a@example.com", time: 1461698487, offset: 754)
+        XCTAssertEqual(formatSignature(sig), "A <a@example.com> 1461698487 +1234")
+    }
+
+    func testParitySignatureSingleCharName() {
+        let sig = Signature(name: "x", email: "x@y.z", time: 100, offset: 0)
+        XCTAssertEqual(formatSignature(sig), "x <x@y.z> 100 +0000")
+    }
+
+    // Commit parity (libgit2 object/validate.c)
+
+    func testParityCommitNoParents() throws {
+        let treeId = OID(hex: "4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        let author = Signature(name: "Author", email: "a@a.com", time: 1638286404, offset: -300)
+        let committer = Signature(name: "Committer", email: "c@c.com", time: 1638324642, offset: -300)
+        let data = serializeCommit(treeId: treeId, parentIds: [], author: author, committer: committer, message: "initial commit\n")
+        let oid = OID.hash(type: .commit, data: Array(data))
+        let parsed = try parseCommit(oid: oid, data: data)
+        XCTAssertEqual(parsed.treeId, treeId)
+        XCTAssertTrue(parsed.parentIds.isEmpty)
+        XCTAssertEqual(parsed.author.name, "Author")
+        XCTAssertEqual(parsed.message, "initial commit\n")
+    }
+
+    func testParityCommitMultipleParents() throws {
+        let treeId = OID(hex: "4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        let p1 = OID(hex: "ae90f12eea699729ed24555e40b9fd669da12a12")
+        let p2 = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let sig = Signature(name: "M", email: "m@m.com", time: 1000, offset: 0)
+        let data = serializeCommit(treeId: treeId, parentIds: [p1, p2], author: sig, committer: sig, message: "merge\n")
+        let oid = OID.hash(type: .commit, data: Array(data))
+        let parsed = try parseCommit(oid: oid, data: data)
+        XCTAssertEqual(parsed.parentIds.count, 2)
+        XCTAssertEqual(parsed.parentIds[0], p1)
+        XCTAssertEqual(parsed.parentIds[1], p2)
+    }
+
+    func testParityCommitWithEncoding() throws {
+        let treeId = OID(hex: "4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        let sig = Signature(name: "UTF8", email: "u@u.com", time: 0, offset: 0)
+        let data = serializeCommit(treeId: treeId, parentIds: [], author: sig, committer: sig, message: "msg\n", messageEncoding: "ISO-8859-1")
+        let oid = OID.hash(type: .commit, data: Array(data))
+        let parsed = try parseCommit(oid: oid, data: data)
+        XCTAssertEqual(parsed.messageEncoding, "ISO-8859-1")
+    }
+
+    func testParityCommitRoundtripPreservesOID() throws {
+        let treeId = OID(hex: "bdd24e358576f1baa275df98cdcaf3ac9a3f4233")
+        let parentId = OID(hex: "d6d956f1d66210bfcd0484166befab33b5987a39")
+        let author = Signature(name: "Edward Thomson", email: "ethomson@edwardthomson.com", time: 1638286404, offset: -300)
+        let committer = Signature(name: "Edward Thomson", email: "ethomson@edwardthomson.com", time: 1638324642, offset: -300)
+        let data1 = serializeCommit(treeId: treeId, parentIds: [parentId], author: author, committer: committer, message: "commit go here.\n")
+        let oid1 = OID.hash(type: .commit, data: Array(data1))
+        let parsed = try parseCommit(oid: oid1, data: data1)
+        let data2 = serializeCommit(treeId: parsed.treeId, parentIds: parsed.parentIds, author: parsed.author, committer: parsed.committer, message: parsed.message, messageEncoding: parsed.messageEncoding)
+        let oid2 = OID.hash(type: .commit, data: Array(data2))
+        XCTAssertEqual(oid1, oid2)
+    }
+
+    // Tree parity (libgit2 object/tree/parse.c)
+
+    func testParityTreeEmpty() throws {
+        let data = serializeTree(entries: [])
+        XCTAssertTrue(data.isEmpty)
+        let oid = OID.hash(type: .tree, data: Array(data))
+        let parsed = try parseTree(oid: oid, data: data)
+        XCTAssertTrue(parsed.entries.isEmpty)
+        let oid2 = OID.hash(type: .tree, data: [])
+        XCTAssertEqual(oid, oid2)
+    }
+
+    func testParityTreeSingleBlob() throws {
+        let blobOid = OID(hex: "ae90f12eea699729ed24555e40b9fd669da12a12")
+        let entries = [TreeEntry(mode: FileMode.blob.rawValue, name: "foo", oid: blobOid)]
+        let data = serializeTree(entries: entries)
+        let parsed = try parseTree(oid: OID.zero, data: data)
+        XCTAssertEqual(parsed.entries.count, 1)
+        XCTAssertEqual(parsed.entries[0].name, "foo")
+        XCTAssertEqual(parsed.entries[0].mode, FileMode.blob.rawValue)
+        XCTAssertEqual(parsed.entries[0].oid, blobOid)
+    }
+
+    func testParityTreeSingleSubtree() throws {
+        let treeOid = OID(hex: "ae90f12eea699729ed24555e40b9fd669da12a12")
+        let entries = [TreeEntry(mode: FileMode.tree.rawValue, name: "subdir", oid: treeOid)]
+        let data = serializeTree(entries: entries)
+        let parsed = try parseTree(oid: OID.zero, data: data)
+        XCTAssertEqual(parsed.entries.count, 1)
+        XCTAssertTrue(parsed.entries[0].isTree)
+        XCTAssertFalse(parsed.entries[0].isBlob)
+    }
+
+    func testParityTreeMultipleModes() throws {
+        let oid1 = OID(hex: "ae90f12eea699729ed24555e40b9fd669da12a12")
+        let oid2 = OID(hex: "e8bfe5af39579a7e4898bb23f3a76a72c368cee6")
+        let entries = [
+            TreeEntry(mode: FileMode.blob.rawValue, name: "file.txt", oid: oid1),
+            TreeEntry(mode: FileMode.blobExe.rawValue, name: "run.sh", oid: oid2),
+            TreeEntry(mode: FileMode.link.rawValue, name: "sym", oid: oid1),
+            TreeEntry(mode: FileMode.tree.rawValue, name: "dir", oid: oid2),
+        ]
+        let data = serializeTree(entries: entries)
+        let parsed = try parseTree(oid: OID.zero, data: data)
+        XCTAssertEqual(parsed.entries.count, 4)
+        XCTAssertEqual(parsed.entries[0].name, "dir")
+        XCTAssertEqual(parsed.entries[0].mode, FileMode.tree.rawValue)
+        XCTAssertEqual(parsed.entries[1].name, "file.txt")
+        XCTAssertEqual(parsed.entries[2].name, "run.sh")
+        XCTAssertEqual(parsed.entries[3].name, "sym")
+    }
+
+    func testParityTreeRoundtripPreservesOID() throws {
+        let oid = OID(hex: "ce013625030ba8dba906f756967f9e9ca394464a")
+        let entries = [
+            TreeEntry(mode: FileMode.blob.rawValue, name: "hello.txt", oid: oid),
+            TreeEntry(mode: FileMode.blobExe.rawValue, name: "script.sh", oid: oid),
+        ]
+        let data1 = serializeTree(entries: entries)
+        let treeOid1 = OID.hash(type: .tree, data: Array(data1))
+        let parsed = try parseTree(oid: treeOid1, data: data1)
+        let data2 = serializeTree(entries: parsed.entries)
+        let treeOid2 = OID.hash(type: .tree, data: Array(data2))
+        XCTAssertEqual(treeOid1, treeOid2)
+    }
+
+    // Tag parity
+
+    func testParityTagTargetingDifferentTypes() throws {
+        let target = OID(hex: "ae90f12eea699729ed24555e40b9fd669da12a12")
+        let tagger = Signature(name: "T", email: "t@t", time: 0, offset: 0)
+        for objType in [ObjectType.commit, ObjectType.tree, ObjectType.blob] {
+            let data = serializeTag(targetId: target, targetType: objType, tagName: "v1.0", tagger: tagger, message: "tag msg\n")
+            let oid = OID.hash(type: .tag, data: Array(data))
+            let parsed = try parseTag(oid: oid, data: data)
+            XCTAssertEqual(parsed.targetType, objType)
+            XCTAssertEqual(parsed.tagName, "v1.0")
+        }
+    }
+
+    func testParityTagWithoutTagger() throws {
+        let target = OID(hex: "ae90f12eea699729ed24555e40b9fd669da12a12")
+        let data = serializeTag(targetId: target, targetType: .commit, tagName: "lightweight", tagger: nil, message: "no tagger\n")
+        let oid = OID.hash(type: .tag, data: Array(data))
+        let parsed = try parseTag(oid: oid, data: data)
+        XCTAssertNil(parsed.tagger)
+        XCTAssertEqual(parsed.tagName, "lightweight")
+    }
+
+    // Config parity (libgit2 config/read.c)
+
+    func testParityConfigBooleanValues() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_parity_config_bool"
+        try? FileManager.default.removeItem(atPath: tmp)
+        try FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let path = (tmp as NSString).appendingPathComponent("config")
+        try "[core]\n\tfilemode = true\n\tbare = false\n\tyes = yes\n\tno = no\n\ton = on\n\toff = off\n\tone = 1\n\tzero = 0\n".write(toFile: path, atomically: true, encoding: .utf8)
+        let cfg = try Config.load(from: path)
+        XCTAssertEqual(cfg.getBool(section: "core", key: "filemode"), true)
+        XCTAssertEqual(cfg.getBool(section: "core", key: "bare"), false)
+        XCTAssertEqual(cfg.getBool(section: "core", key: "yes"), true)
+        XCTAssertEqual(cfg.getBool(section: "core", key: "no"), false)
+        XCTAssertEqual(cfg.getBool(section: "core", key: "on"), true)
+        XCTAssertEqual(cfg.getBool(section: "core", key: "off"), false)
+        XCTAssertEqual(cfg.getBool(section: "core", key: "one"), true)
+        XCTAssertEqual(cfg.getBool(section: "core", key: "zero"), false)
+    }
+
+    func testParityConfigIntSuffixes() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_parity_config_int"
+        try? FileManager.default.removeItem(atPath: tmp)
+        try FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let path = (tmp as NSString).appendingPathComponent("config")
+        try "[core]\n\tplain = 42\n\tkilo = 1k\n\tmega = 1m\n\tgiga = 1g\n".write(toFile: path, atomically: true, encoding: .utf8)
+        let cfg = try Config.load(from: path)
+        XCTAssertEqual(cfg.getInt(section: "core", key: "plain"), 42)
+        XCTAssertEqual(cfg.getInt(section: "core", key: "kilo"), 1024)
+        XCTAssertEqual(cfg.getInt(section: "core", key: "mega"), 1048576)
+        XCTAssertEqual(cfg.getInt(section: "core", key: "giga"), 1073741824)
+    }
+
+    func testParityConfigCaseInsensitive() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_parity_config_case"
+        try? FileManager.default.removeItem(atPath: tmp)
+        try FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let path = (tmp as NSString).appendingPathComponent("config")
+        try "[Core]\n\tFileMode = true\n".write(toFile: path, atomically: true, encoding: .utf8)
+        let cfg = try Config.load(from: path)
+        XCTAssertEqual(cfg.getBool(section: "core", key: "filemode"), true)
+        XCTAssertEqual(cfg.getBool(section: "CORE", key: "FILEMODE"), true)
+    }
+
+    func testParityConfigComments() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_parity_config_comments"
+        try? FileManager.default.removeItem(atPath: tmp)
+        try FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let path = (tmp as NSString).appendingPathComponent("config")
+        try "# Comment\n; Also comment\n[core]\n\t# in section\n\tbare = false\n".write(toFile: path, atomically: true, encoding: .utf8)
+        let cfg = try Config.load(from: path)
+        XCTAssertEqual(cfg.getBool(section: "core", key: "bare"), false)
+    }
+
+    // Blob parity
+
+    func testParityBlobEmptyOID() {
+        let oid = OID.hash(type: .blob, data: [])
+        XCTAssertEqual(oid.hex, "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391")
+    }
+
+    func testParityBlobKnownContent() {
+        let oid = OID.hash(type: .blob, data: Array("hello\n".utf8))
+        XCTAssertEqual(oid.hex, "ce013625030ba8dba906f756967f9e9ca394464a")
+    }
+
+    func testParityBlobNewlineOnly() {
+        let oid = OID.hash(type: .blob, data: [0x0a])
+        XCTAssertEqual(oid.hex, "8b137891791fe96927ad78e64b0aad7bded08bdc")
+    }
+
+    // Index parity
+
+    func testParityIndexSortedByPath() {
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        var index = Index()
+        index.add(IndexEntry(mode: 0o100644, oid: oid, path: "z.txt"))
+        index.add(IndexEntry(mode: 0o100644, oid: oid, path: "a.txt"))
+        index.add(IndexEntry(mode: 0o100644, oid: oid, path: "m/file.c"))
+        XCTAssertEqual(index.entries[0].path, "a.txt")
+        XCTAssertEqual(index.entries[1].path, "m/file.c")
+        XCTAssertEqual(index.entries[2].path, "z.txt")
+    }
+
+    func testParityIndexDuplicatePathReplaces() {
+        let oid1 = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let oid2 = OID(hex: "ce013625030ba8dba906f756967f9e9ca394464a")
+        var index = Index()
+        index.add(IndexEntry(mode: 0o100644, fileSize: 10, oid: oid1, path: "file.txt"))
+        index.add(IndexEntry(mode: 0o100644, fileSize: 20, oid: oid2, path: "file.txt"))
+        XCTAssertEqual(index.entries.count, 1)
+        XCTAssertEqual(index.entries[0].oid, oid2)
+        XCTAssertEqual(index.entries[0].fileSize, 20)
+    }
+
+    func testParityIndexManyEntriesRoundtrip() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_parity_index_many"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp)
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        var index = Index()
+        for i in 0..<100 {
+            index.add(IndexEntry(mode: 0o100644, fileSize: UInt32(i), oid: oid, path: String(format: "file_%04d.txt", i)))
+        }
+        try writeIndex(gitDir: repo.gitDir, index: index)
+        let loaded = try readIndex(gitDir: repo.gitDir)
+        XCTAssertEqual(loaded.entries.count, 100)
+        for i in 1..<loaded.entries.count {
+            XCTAssertTrue(loaded.entries[i - 1].path < loaded.entries[i].path)
+        }
+    }
+
+    // Diff parity
+
+    func testParityDiffSortedOutput() {
+        let oid1 = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let oid2 = OID(hex: "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let old = [
+            TreeEntry(mode: FileMode.blob.rawValue, name: "a.txt", oid: oid1),
+            TreeEntry(mode: FileMode.blob.rawValue, name: "c.txt", oid: oid1),
+            TreeEntry(mode: FileMode.blob.rawValue, name: "e.txt", oid: oid1),
+        ]
+        let new = [
+            TreeEntry(mode: FileMode.blob.rawValue, name: "b.txt", oid: oid2),
+            TreeEntry(mode: FileMode.blob.rawValue, name: "c.txt", oid: oid2),
+            TreeEntry(mode: FileMode.blob.rawValue, name: "d.txt", oid: oid2),
+        ]
+        let deltas = diffTrees(oldEntries: old, newEntries: new)
+        let paths = deltas.map { $0.path }
+        XCTAssertEqual(paths, ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"])
+        XCTAssertEqual(deltas[0].status, .deleted)
+        XCTAssertEqual(deltas[1].status, .added)
+        XCTAssertEqual(deltas[2].status, .modified)
+        XCTAssertEqual(deltas[3].status, .added)
+        XCTAssertEqual(deltas[4].status, .deleted)
+    }
+
+    func testParityDiffModeChangeIsModified() {
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let old = [TreeEntry(mode: FileMode.blob.rawValue, name: "f", oid: oid)]
+        let new = [TreeEntry(mode: FileMode.blobExe.rawValue, name: "f", oid: oid)]
+        let deltas = diffTrees(oldEntries: old, newEntries: new)
+        XCTAssertEqual(deltas.count, 1)
+        XCTAssertEqual(deltas[0].status, .modified)
+    }
+
+    // Delta parity
+
+    func testParityDeltaEmptyInsert() throws {
+        let base = Array("base".utf8)
+        var delta: [UInt8] = [4, 3, 3]
+        delta.append(contentsOf: Array("new".utf8))
+        let result = try applyDelta(base: base, delta: delta)
+        XCTAssertEqual(String(bytes: result, encoding: .utf8), "new")
+    }
+
+    func testParityDeltaInvalidOpcodeZero() {
+        let base = Array("base".utf8)
+        let delta: [UInt8] = [4, 1, 0]
+        XCTAssertThrowsError(try applyDelta(base: base, delta: delta))
+    }
+
+    // SHA NIST vectors
+
+    func testParitySHA1NISTVectors() {
+        XCTAssertEqual(SHA1.hash(Array("abc".utf8)).map { String(format: "%02x", $0) }.joined(), "a9993e364706816aba3e25717850c26c9cd0d89d")
+        XCTAssertEqual(SHA1.hash([UInt8]()).map { String(format: "%02x", $0) }.joined(), "da39a3ee5e6b4b0d3255bfef95601890afd80709")
+    }
+
+    func testParitySHA256NISTVectors() {
+        XCTAssertEqual(SHA256Hash.hash(Array("abc".utf8)).map { String(format: "%02x", $0) }.joined(), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        XCTAssertEqual(SHA256Hash.hash([UInt8]()).map { String(format: "%02x", $0) }.joined(), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    }
+
+    // Repository parity
+
+    func testParityRepoInitCreatesStructure() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_parity_repo_init"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp)
+        XCTAssertFalse(repo.isBare)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: (repo.gitDir as NSString).appendingPathComponent("HEAD")))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: (repo.gitDir as NSString).appendingPathComponent("objects")))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: (repo.gitDir as NSString).appendingPathComponent("refs")))
+        let head = try String(contentsOfFile: (repo.gitDir as NSString).appendingPathComponent("HEAD"), encoding: .utf8)
+        XCTAssertTrue(head.contains("ref: refs/heads/main"))
+    }
+
+    func testParityRepoInitBare() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_parity_repo_bare"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp, bare: true)
+        XCTAssertTrue(repo.isBare)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: (repo.gitDir as NSString).appendingPathComponent("HEAD")))
+    }
+
+    func testParityRepoReinitPreserves() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_parity_repo_reinit"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let _ = try Repository.create(at: tmp)
+        let gitDir = (tmp as NSString).appendingPathComponent(".git")
+        try "ae90f12eea699729ed24555e40b9fd669da12a12\n".write(toFile: ((gitDir as NSString).appendingPathComponent("refs/heads/main")), atomically: true, encoding: .utf8)
+        let _ = try Repository.create(at: tmp)
+        let refContent = try String(contentsOfFile: ((gitDir as NSString).appendingPathComponent("refs/heads/main")), encoding: .utf8)
+        XCTAssertTrue(refContent.contains("ae90f12eea699729ed24555e40b9fd669da12a12"))
+    }
+
+    // ── Performance Tests ──
+
+    private func measureMs(_ block: () -> Void) -> Double {
+        let start = Date()
+        block()
+        return Date().timeIntervalSince(start) * 1000.0
+    }
+
+    func testPerfSHA1Throughput1MB() {
+        let data = [UInt8](repeating: 0xAB, count: 1_000_000)
+        let ms = measureMs { let _ = SHA1.hash(data) }
+        print("[perf] SHA-1 1MB: \(String(format: "%.2f", ms))ms")
+        XCTAssertTrue(ms < 1000.0, "SHA-1 1MB took \(ms)ms")
+    }
+
+    func testPerfSHA256Throughput1MB() {
+        let data = [UInt8](repeating: 0xAB, count: 1_000_000)
+        let ms = measureMs { let _ = SHA256Hash.hash(data) }
+        print("[perf] SHA-256 1MB: \(String(format: "%.2f", ms))ms")
+        XCTAssertTrue(ms < 1000.0, "SHA-256 1MB took \(ms)ms")
+    }
+
+    func testPerfOIDCreation10K() {
+        let ms = measureMs {
+            for i in 0..<10_000 {
+                let data = Array("blob content \(i)".utf8)
+                let _ = OID.hash(type: .blob, data: data)
+            }
+        }
+        print("[perf] OID creation 10K: \(String(format: "%.2f", ms))ms")
+        XCTAssertTrue(ms < 5000.0, "OID creation 10K took \(ms)ms")
+    }
+
+    func testPerfTreeSerialize1KEntries() throws {
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let entries = (0..<1000).map { TreeEntry(mode: FileMode.blob.rawValue, name: String(format: "file_%04d.txt", $0), oid: oid) }
+        let ms = measureMs {
+            let data = serializeTree(entries: entries)
+            let _ = try! parseTree(oid: OID.zero, data: data)
+        }
+        print("[perf] Tree serialize+parse 1K: \(String(format: "%.2f", ms))ms")
+        XCTAssertTrue(ms < 1000.0, "Tree 1K took \(ms)ms")
+    }
+
+    func testPerfCommitSerialize10K() {
+        let treeId = OID(hex: "4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        let sig = Signature(name: "Perf Test", email: "perf@test", time: 1000000, offset: 0)
+        let ms = measureMs {
+            for i in 0..<10_000 {
+                let _ = serializeCommit(treeId: treeId, parentIds: [], author: sig, committer: sig, message: "commit \(i)\n")
+            }
+        }
+        print("[perf] Commit serialize 10K: \(String(format: "%.2f", ms))ms")
+        XCTAssertTrue(ms < 5000.0, "Commit serialize 10K took \(ms)ms")
+    }
+
+    func testPerfIndexReadWrite1K() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_perf_index"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp)
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        var index = Index()
+        for i in 0..<1000 {
+            index.add(IndexEntry(mode: 0o100644, fileSize: UInt32(i), oid: oid, path: String(format: "src/file_%04d.txt", i)))
+        }
+        let ms = measureMs {
+            try! writeIndex(gitDir: repo.gitDir, index: index)
+            let _ = try! readIndex(gitDir: repo.gitDir)
+        }
+        print("[perf] Index write+read 1K: \(String(format: "%.2f", ms))ms")
+        XCTAssertTrue(ms < 5000.0, "Index 1K took \(ms)ms")
+    }
+
+    func testPerfDiffLargeTrees() {
+        let oid1 = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let oid2 = OID(hex: "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let old = (0..<1000).map { TreeEntry(mode: FileMode.blob.rawValue, name: String(format: "file_%04d.txt", $0), oid: oid1) }
+        let new = (0..<1000).map { i -> TreeEntry in
+            let oid = i % 10 == 0 ? oid2 : oid1
+            return TreeEntry(mode: FileMode.blob.rawValue, name: String(format: "file_%04d.txt", i), oid: oid)
+        }
+        let ms = measureMs {
+            let deltas = diffTrees(oldEntries: old, newEntries: new)
+            XCTAssertEqual(deltas.count, 100)
+        }
+        print("[perf] Diff 1K-entry trees: \(String(format: "%.2f", ms))ms")
+        XCTAssertTrue(ms < 1000.0, "Diff 1K took \(ms)ms")
+    }
+
+    func testPerfBlobHashing10K() {
+        let ms = measureMs {
+            for i in 0..<10_000 {
+                let content = Array("line \(i)\nmore content here\n".utf8)
+                let _ = OID.hash(type: .blob, data: content)
+            }
+        }
+        print("[perf] Blob hashing 10K: \(String(format: "%.2f", ms))ms")
+        XCTAssertTrue(ms < 5000.0, "Blob hashing 10K took \(ms)ms")
+    }
+
+    func testPerfSHA1vsSHA256Comparison() {
+        let data = [UInt8](repeating: 0xAB, count: 1_000_000)
+        let msSha1 = measureMs { let _ = SHA1.hash(data) }
+        let msSha256 = measureMs { let _ = SHA256Hash.hash(data) }
+        print("[perf] SHA-1 1MB: \(String(format: "%.2f", msSha1))ms, SHA-256 1MB: \(String(format: "%.2f", msSha256))ms, ratio: \(String(format: "%.2f", msSha256 / max(msSha1, 0.001)))x")
+        XCTAssertTrue(msSha1 < 1000.0)
+        XCTAssertTrue(msSha256 < 1000.0)
     }
 }
