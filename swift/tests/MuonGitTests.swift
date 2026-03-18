@@ -1099,4 +1099,87 @@ final class MuonGitTests: XCTestCase {
         XCTAssertEqual(new.count, 1)
         XCTAssertEqual(new[0].path, "d.txt")
     }
+
+    // MARK: - Pack Index Tests
+
+    private func sortedTestOids() -> ([OID], [UInt32], [UInt64]) {
+        var oids = [
+            OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"),
+            OID(hex: "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"),
+            OID(hex: "ccf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"),
+        ]
+        oids.sort { compareOidBytes($0.raw, $1.raw) }
+        let crcs: [UInt32] = [0x12345678, 0x23456789, 0x3456789A]
+        let offsets: [UInt64] = [12, 256, 1024]
+        return (oids, crcs, offsets)
+    }
+
+    private func compareOidBytes(_ a: [UInt8], _ b: [UInt8]) -> Bool {
+        for i in 0..<min(a.count, b.count) {
+            if a[i] < b[i] { return true }
+            if a[i] > b[i] { return false }
+        }
+        return a.count < b.count
+    }
+
+    func testParsePackIndex() throws {
+        let (oids, crcs, offsets) = sortedTestOids()
+        let data = buildPackIndex(oids: oids, crcs: crcs, offsets: offsets)
+        let idx = try parsePackIndex(data)
+
+        XCTAssertEqual(idx.count, 3)
+        XCTAssertEqual(idx.oids.count, 3)
+        XCTAssertEqual(idx.crcs.count, 3)
+        XCTAssertEqual(idx.offsets.count, 3)
+    }
+
+    func testPackIndexFind() throws {
+        let (oids, crcs, offsets) = sortedTestOids()
+        let data = buildPackIndex(oids: oids, crcs: crcs, offsets: offsets)
+        let idx = try parsePackIndex(data)
+
+        XCTAssertEqual(idx.find(oids[0]), offsets[0])
+        XCTAssertEqual(idx.find(oids[1]), offsets[1])
+        XCTAssertEqual(idx.find(oids[2]), offsets[2])
+
+        let missing = OID(hex: "ddf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        XCTAssertNil(idx.find(missing))
+    }
+
+    func testPackIndexContains() throws {
+        let (oids, crcs, offsets) = sortedTestOids()
+        let data = buildPackIndex(oids: oids, crcs: crcs, offsets: offsets)
+        let idx = try parsePackIndex(data)
+
+        XCTAssertTrue(idx.contains(oids[0]))
+        XCTAssertTrue(idx.contains(oids[1]))
+
+        let missing = OID(hex: "0000000000000000000000000000000000000001")
+        XCTAssertFalse(idx.contains(missing))
+    }
+
+    func testPackIndexFanout() throws {
+        let (oids, crcs, offsets) = sortedTestOids()
+        let data = buildPackIndex(oids: oids, crcs: crcs, offsets: offsets)
+        let idx = try parsePackIndex(data)
+
+        XCTAssertEqual(idx.fanout[0xa9], 0)
+        XCTAssertEqual(idx.fanout[0xaa], 1)
+        XCTAssertEqual(idx.fanout[0xbb], 2)
+        XCTAssertEqual(idx.fanout[0xcc], 3)
+        XCTAssertEqual(idx.fanout[255], 3)
+    }
+
+    func testPackIndexEmpty() throws {
+        let data = buildPackIndex(oids: [], crcs: [], offsets: [])
+        let idx = try parsePackIndex(data)
+        XCTAssertEqual(idx.count, 0)
+        XCTAssertTrue(idx.oids.isEmpty)
+    }
+
+    func testPackIndexBadMagic() {
+        var data = buildPackIndex(oids: [], crcs: [], offsets: [])
+        data[0] = 0x00
+        XCTAssertThrowsError(try parsePackIndex(data))
+    }
 }

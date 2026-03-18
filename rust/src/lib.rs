@@ -17,6 +17,7 @@ pub mod reflog;
 pub mod index;
 pub mod diff;
 pub mod status;
+pub mod pack_index;
 
 pub use oid::OID;
 pub use types::{ObjectType, Signature};

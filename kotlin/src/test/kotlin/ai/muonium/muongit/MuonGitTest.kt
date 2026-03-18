@@ -1248,4 +1248,86 @@ class MuonGitTest {
             tmp.deleteRecursively()
         }
     }
+
+    // Pack Index Tests
+
+    private fun sortedTestOids(): Triple<List<OID>, IntArray, LongArray> {
+        val oids = listOf(
+            OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"),
+            OID("bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"),
+            OID("ccf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"),
+        ).sortedBy { it.hex }
+        val crcs = intArrayOf(0x12345678, 0x23456789, 0x3456789A.toInt())
+        val offsets = longArrayOf(12L, 256L, 1024L)
+        return Triple(oids, crcs, offsets)
+    }
+
+    @Test
+    fun testParsePackIndex() {
+        val (oids, crcs, offsets) = sortedTestOids()
+        val data = buildPackIndex(oids, crcs, offsets)
+        val idx = parsePackIndex(data)
+
+        assertEquals(3, idx.count)
+        assertEquals(3, idx.oids.size)
+        assertEquals(3, idx.crcs.size)
+        assertEquals(3, idx.offsets.size)
+    }
+
+    @Test
+    fun testPackIndexFind() {
+        val (oids, crcs, offsets) = sortedTestOids()
+        val data = buildPackIndex(oids, crcs, offsets)
+        val idx = parsePackIndex(data)
+
+        assertEquals(offsets[0], idx.find(oids[0]))
+        assertEquals(offsets[1], idx.find(oids[1]))
+        assertEquals(offsets[2], idx.find(oids[2]))
+
+        val missing = OID("ddf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        assertNull(idx.find(missing))
+    }
+
+    @Test
+    fun testPackIndexContains() {
+        val (oids, crcs, offsets) = sortedTestOids()
+        val data = buildPackIndex(oids, crcs, offsets)
+        val idx = parsePackIndex(data)
+
+        assertTrue(idx.contains(oids[0]))
+        assertTrue(idx.contains(oids[1]))
+
+        val missing = OID("0000000000000000000000000000000000000001")
+        assertTrue(!idx.contains(missing))
+    }
+
+    @Test
+    fun testPackIndexFanout() {
+        val (oids, crcs, offsets) = sortedTestOids()
+        val data = buildPackIndex(oids, crcs, offsets)
+        val idx = parsePackIndex(data)
+
+        assertEquals(0, idx.fanout[0xa9])
+        assertEquals(1, idx.fanout[0xaa])
+        assertEquals(2, idx.fanout[0xbb])
+        assertEquals(3, idx.fanout[0xcc])
+        assertEquals(3, idx.fanout[255])
+    }
+
+    @Test
+    fun testPackIndexEmpty() {
+        val data = buildPackIndex(emptyList(), intArrayOf(), longArrayOf())
+        val idx = parsePackIndex(data)
+        assertEquals(0, idx.count)
+        assertTrue(idx.oids.isEmpty())
+    }
+
+    @Test
+    fun testPackIndexBadMagic() {
+        val data = buildPackIndex(emptyList(), intArrayOf(), longArrayOf())
+        data[0] = 0x00
+        assertFailsWith<MuonGitException.InvalidObject> {
+            parsePackIndex(data)
+        }
+    }
 }
