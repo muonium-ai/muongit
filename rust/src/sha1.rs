@@ -34,19 +34,42 @@ impl Default for SHA1 {
     }
 }
 
+/// Build git object header ("type size\0") into a stack buffer, returns valid slice length
+pub fn build_object_header(obj_type: crate::ObjectType, data_len: usize, buf: &mut [u8; 32]) -> usize {
+    let type_bytes: &[u8] = match obj_type {
+        crate::ObjectType::Commit => b"commit ",
+        crate::ObjectType::Tree => b"tree ",
+        crate::ObjectType::Blob => b"blob ",
+        crate::ObjectType::Tag => b"tag ",
+    };
+    let mut pos = type_bytes.len();
+    buf[..pos].copy_from_slice(type_bytes);
+    // Write decimal size
+    if data_len == 0 {
+        buf[pos] = b'0';
+        pos += 1;
+    } else {
+        let start = pos;
+        let mut v = data_len;
+        while v > 0 {
+            buf[pos] = b'0' + (v % 10) as u8;
+            v /= 10;
+            pos += 1;
+        }
+        buf[start..pos].reverse();
+    }
+    buf[pos] = 0; // null terminator
+    pos += 1;
+    pos
+}
+
 impl crate::OID {
     /// Create an OID by hashing data with SHA-1 (git object style)
     pub fn hash_object(obj_type: crate::ObjectType, data: &[u8]) -> Self {
-        let type_name = match obj_type {
-            crate::ObjectType::Commit => "commit",
-            crate::ObjectType::Tree => "tree",
-            crate::ObjectType::Blob => "blob",
-            crate::ObjectType::Tag => "tag",
-        };
-
-        let header = format!("{} {}\0", type_name, data.len());
+        let mut header_buf = [0u8; 32];
+        let header_len = build_object_header(obj_type, data.len(), &mut header_buf);
         let mut sha = SHA1::new();
-        sha.update(header.as_bytes());
+        sha.update(&header_buf[..header_len]);
         sha.update(data);
         Self::from_bytes(sha.finalize().to_vec())
     }

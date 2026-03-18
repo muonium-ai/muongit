@@ -43,16 +43,10 @@ impl crate::OID {
 
     /// Create an OID by hashing data with SHA-256 (git object style, experimental)
     pub fn hash_object_sha256(obj_type: crate::ObjectType, data: &[u8]) -> Self {
-        let type_name = match obj_type {
-            crate::ObjectType::Commit => "commit",
-            crate::ObjectType::Tree => "tree",
-            crate::ObjectType::Blob => "blob",
-            crate::ObjectType::Tag => "tag",
-        };
-
-        let header = format!("{} {}\0", type_name, data.len());
+        let mut header_buf = [0u8; 32];
+        let header_len = crate::sha1::build_object_header(obj_type, data.len(), &mut header_buf);
         let mut sha = SHA256::new();
-        sha.update(header.as_bytes());
+        sha.update(&header_buf[..header_len]);
         sha.update(data);
         Self::from_bytes(sha.finalize().to_vec())
     }

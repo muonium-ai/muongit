@@ -50,20 +50,55 @@ public struct SHA1 {
 
 // MARK: - OID SHA-1 Extensions
 
+// Pre-computed type name bytes with trailing space for git object headers
+private let typeNameBlob: [UInt8] = [UInt8]("blob ".utf8)
+private let typeNameTree: [UInt8] = [UInt8]("tree ".utf8)
+private let typeNameCommit: [UInt8] = [UInt8]("commit ".utf8)
+private let typeNameTag: [UInt8] = [UInt8]("tag ".utf8)
+
+/// Get pre-computed type name bytes with trailing space
+func objectTypeNameBytes(_ type: ObjectType) -> [UInt8] {
+    switch type {
+    case .blob:   return typeNameBlob
+    case .tree:   return typeNameTree
+    case .commit: return typeNameCommit
+    case .tag:    return typeNameTag
+    }
+}
+
+/// Build git object header ("type size\0") as byte array without string formatting
+func buildObjectHeader(type: ObjectType, size: Int) -> [UInt8] {
+    var header = objectTypeNameBytes(type)
+    // Append decimal size
+    if size == 0 {
+        header.append(0x30)
+    } else {
+        let start = header.count
+        var v = size
+        while v > 0 {
+            header.append(UInt8(v % 10) + 0x30)
+            v /= 10
+        }
+        var lo = start
+        var hi = header.count - 1
+        while lo < hi {
+            let tmp = header[lo]
+            header[lo] = header[hi]
+            header[hi] = tmp
+            lo += 1
+            hi -= 1
+        }
+    }
+    header.append(0) // null terminator
+    return header
+}
+
 extension OID {
     /// Create an OID by hashing data with SHA-1 (git object style)
     public static func hash(type: ObjectType, data: [UInt8]) -> OID {
-        let typeName: String
-        switch type {
-        case .commit: typeName = "commit"
-        case .tree:   typeName = "tree"
-        case .blob:   typeName = "blob"
-        case .tag:    typeName = "tag"
-        }
-
-        let header = "\(typeName) \(data.count)\0"
+        let header = buildObjectHeader(type: type, size: data.count)
         var sha = SHA1()
-        sha.update(Array(header.utf8))
+        sha.update(header)
         sha.update(data)
         return OID(raw: sha.finalize())
     }

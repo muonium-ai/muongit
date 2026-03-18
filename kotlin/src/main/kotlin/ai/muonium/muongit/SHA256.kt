@@ -5,12 +5,18 @@ package ai.muonium.muongit
 
 import java.security.MessageDigest
 
+private val PROTOTYPE_SHA256 = MessageDigest.getInstance("SHA-256")
+
 @OptIn(ExperimentalUnsignedTypes::class)
 class SHA256Hash {
-    private val digest: MessageDigest = MessageDigest.getInstance("SHA-256")
+    internal val digest: MessageDigest = PROTOTYPE_SHA256.clone() as MessageDigest
 
     fun update(data: ByteArray) {
         digest.update(data)
+    }
+
+    fun update(data: ByteArray, offset: Int, len: Int) {
+        digest.update(data, offset, len)
     }
 
     fun update(string: String) {
@@ -23,7 +29,8 @@ class SHA256Hash {
 
     companion object {
         fun hash(data: ByteArray): ByteArray {
-            return MessageDigest.getInstance("SHA-256").digest(data)
+            val d = PROTOTYPE_SHA256.clone() as MessageDigest
+            return d.digest(data)
         }
 
         fun hash(string: String): ByteArray = hash(string.encodeToByteArray())
@@ -41,16 +48,10 @@ enum class HashAlgorithm(val digestLength: Int) {
 
 // OID SHA-256 extensions
 fun OID.Companion.hashObjectSHA256(type: ObjectType, data: ByteArray): OID {
-    val typeName = when (type) {
-        ObjectType.COMMIT -> "commit"
-        ObjectType.TREE -> "tree"
-        ObjectType.BLOB -> "blob"
-        ObjectType.TAG -> "tag"
-    }
-
-    val header = "$typeName ${data.size}\u0000"
+    val headerBuf = ByteArray(20)
+    val headerLen = buildObjectHeaderInto(type, data.size, headerBuf)
     val sha = SHA256Hash()
-    sha.update(header.encodeToByteArray())
+    sha.update(headerBuf, 0, headerLen)
     sha.update(data)
     return OID(sha.finalize())
 }

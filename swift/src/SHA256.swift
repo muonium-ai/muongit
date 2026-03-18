@@ -74,17 +74,9 @@ extension OID {
 
     /// Create an OID by hashing data with SHA-256 (git object style, experimental)
     public static func hashSHA256(type: ObjectType, data: [UInt8]) -> OID {
-        let typeName: String
-        switch type {
-        case .commit: typeName = "commit"
-        case .tree:   typeName = "tree"
-        case .blob:   typeName = "blob"
-        case .tag:    typeName = "tag"
-        }
-
-        let header = "\(typeName) \(data.count)\0"
+        let header = buildObjectHeader(type: type, size: data.count)
         var sha = SHA256Hash()
-        sha.update(Array(header.utf8))
+        sha.update(header)
         sha.update(data)
         return OID(raw: sha.finalize())
     }
