@@ -123,7 +123,7 @@ fn decompress_stream(file: &mut File) -> Result<Vec<u8>, MuonGitError> {
     decoder.read_to_end(&mut result)?;
 
     // Seek back to where the compressed data ended
-    let consumed = decoder.total_in() as u64;
+    let consumed = decoder.total_in();
     file.seek(SeekFrom::Start(pos + consumed))?;
 
     Ok(result)

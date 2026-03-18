@@ -108,6 +108,12 @@ impl Config {
     }
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn parse_config(content: &str) -> Vec<(String, String, String)> {
     let mut result = Vec::new();
     let mut current_section = String::new();

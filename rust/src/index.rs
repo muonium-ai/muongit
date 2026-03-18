@@ -37,6 +37,12 @@ pub struct Index {
     pub entries: Vec<IndexEntry>,
 }
 
+impl Default for Index {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Index {
     pub fn new() -> Self {
         Index {
@@ -219,7 +225,7 @@ fn serialize_index(index: &Index) -> Vec<u8> {
         let entry_len = ENTRY_FIXED_SIZE + entry.path.len() + 1;
         let padded_len = (entry_len + 7) & !7;
         let pad_count = padded_len - ENTRY_FIXED_SIZE - entry.path.len();
-        buf.extend(std::iter::repeat(0u8).take(pad_count));
+        buf.extend(std::iter::repeat_n(0u8, pad_count));
     }
 
     // Checksum

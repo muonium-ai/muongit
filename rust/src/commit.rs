@@ -2,7 +2,7 @@
 
 use crate::error::MuonGitError;
 use crate::oid::OID;
-use crate::types::{ObjectType, Signature};
+use crate::types::Signature;
 
 /// A parsed git commit object
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -188,6 +188,7 @@ fn parse_timezone_offset(s: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ObjectType;
 
     #[test]
     fn test_parse_signature() {

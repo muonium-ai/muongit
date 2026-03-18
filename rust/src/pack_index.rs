@@ -80,8 +80,8 @@ pub fn parse_pack_index(data: &[u8]) -> Result<PackIndex, MuonGitError> {
 
     // Read fanout table
     let mut fanout = [0u32; FANOUT_COUNT];
-    for i in 0..FANOUT_COUNT {
-        fanout[i] = read_u32(data, 8 + i * 4);
+    for (i, entry) in fanout.iter_mut().enumerate() {
+        *entry = read_u32(data, 8 + i * 4);
     }
     let count = fanout[255];
 
@@ -131,7 +131,7 @@ pub fn parse_pack_index(data: &[u8]) -> Result<PackIndex, MuonGitError> {
 
 /// Build a pack index from components (for testing).
 pub fn build_pack_index(oids: &[OID], crcs: &[u32], offsets: &[u64]) -> Vec<u8> {
-    let count = oids.len();
+    let _count = oids.len();
     let mut buf = Vec::new();
 
     // Header
@@ -142,8 +142,8 @@ pub fn build_pack_index(oids: &[OID], crcs: &[u32], offsets: &[u64]) -> Vec<u8> 
     let mut fanout = [0u32; FANOUT_COUNT];
     for oid in oids {
         let first = oid.raw()[0] as usize;
-        for j in first..FANOUT_COUNT {
-            fanout[j] += 1;
+        for entry in fanout.iter_mut().skip(first) {
+            *entry += 1;
         }
     }
     for f in &fanout {
