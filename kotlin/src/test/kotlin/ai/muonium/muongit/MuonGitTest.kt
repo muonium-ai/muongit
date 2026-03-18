@@ -131,4 +131,32 @@ class MuonGitTest {
             tmp.deleteRecursively()
         }
     }
+
+    // ODB Tests
+
+    @Test
+    fun testWriteAndReadLooseObject() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_odb")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gitDir = repo.gitDir
+
+            val content = "hello world\n".toByteArray()
+            val oid = writeLooseObject(gitDir, ObjectType.BLOB, content)
+
+            val expectedOid = OID.hashObject(ObjectType.BLOB, content)
+            assertEquals(expectedOid, oid)
+
+            val (readType, readContent) = readLooseObject(gitDir, oid)
+            assertEquals(ObjectType.BLOB, readType)
+            assertTrue(content.contentEquals(readContent), "content should round-trip")
+
+            // Idempotent write
+            val oid2 = writeLooseObject(gitDir, ObjectType.BLOB, content)
+            assertEquals(oid, oid2)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
 }

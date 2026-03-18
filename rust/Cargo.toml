@@ -7,5 +7,6 @@ license = "MIT"
 repository = "https://github.com/muonium-ai/muongit"
 
 [dependencies]
+flate2 = "1.0"
 
 [dev-dependencies]

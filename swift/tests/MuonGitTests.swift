@@ -104,4 +104,28 @@ final class MuonGitTests: XCTestCase {
         let found = try Repository.discover(at: subdir)
         XCTAssertFalse(found.isBare)
     }
+
+    // MARK: - ODB Tests
+
+    func testWriteAndReadLooseObject() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_odb"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let blobData = Data("hello, muongit!\n".utf8)
+
+        // Write a blob
+        let oid = try writeLooseObject(gitDir: repo.gitDir, type: .blob, data: blobData)
+        XCTAssertFalse(oid.isZero)
+
+        // Verify the OID matches what we'd compute directly
+        let expectedOID = OID.hash(type: .blob, data: Array(blobData))
+        XCTAssertEqual(oid, expectedOID)
+
+        // Read it back
+        let (readType, readData) = try readLooseObject(gitDir: repo.gitDir, oid: oid)
+        XCTAssertEqual(readType, .blob)
+        XCTAssertEqual(readData, blobData)
+    }
 }
