@@ -103,4 +103,9 @@ for op in ops:
 
 echo ""
 echo "Results saved to: \$RESULTS_DIR/all_\${TIMESTAMP}.jsonl"
+
+# Generate Markdown report
+echo ""
+echo "Generating Markdown report..."
+python3 "$REPO_ROOT/benchmarks/generate-report.py"
 echo "Done."

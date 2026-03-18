@@ -1,0 +1,76 @@
+# MuonGit Benchmark Report
+
+**Date:** 2026-03-18 16:25:45 UTC
+**Commit:** `1c47e5b`
+**Machine:** Apple M4 (arm64, 16 GB RAM)
+**Platform:** Darwin (Python 3.14.3)
+
+---
+
+## Summary
+
+All times in **milliseconds** (median). Lower is better.
+
+| Operation                 |  libgit2 (C) |         Rust |        Swift |       Kotlin | vs libgit2 |
+| ------------------------- | ------------:| ------------:| ------------:| ------------:| ----------:|
+| sha1_10kb                 |        0.028 |        0.098 |        0.047 |        3.338 |       1.7x |
+| sha256_10kb               |            - |        0.089 |        0.051 |        3.153 |            |
+| sha1_1mb                  |        1.032 |      111.443 |      113.130 |            - |       108x |
+| sha256_1mb                |            - |      111.678 |      114.012 |            - |            |
+| sha1_10mb                 |        9.784 |       13,344 |       13,511 |            - |      1364x |
+| sha256_10mb               |            - |       11,950 |       11,991 |            - |            |
+| oid_cmp_256x16k           |        5.875 |       <0.001 |       34.091 |        7.529 |       1.3x |
+| oid_create_1k             |        0.149 |            - |            - |        1.914 |        13x |
+| oid_create_10k            |        1.611 |       12.937 |        6.082 |            - |       3.8x |
+| oid_create_100k           |       15.804 |      127.753 |       60.471 |            - |       3.8x |
+| blob_hash_1k              |        0.154 |            - |            - |        1.482 |       9.7x |
+| blob_hash_10k             |        1.643 |       12.771 |        6.373 |            - |       3.9x |
+| tree_serialize_1k         |        0.088 |        1.005 |        0.548 |        0.442 |       5.0x |
+| tree_serialize_10k        |        0.929 |       10.706 |        5.425 |        3.460 |       3.7x |
+| commit_serialize_10k      |        3.421 |       16.207 |      148.013 |       48.158 |       4.7x |
+| index_rw_1k               |        1.155 |        2.397 |        2.334 |      431.472 |       2.0x |
+| index_rw_10k              |       10.046 |      195.959 |      181.439 |       57,108 |        18x |
+| diff_1k                   |       <0.001 |        0.016 |        0.041 |        0.167 |            |
+| diff_10k                  |       <0.001 |        0.168 |        0.418 |        0.221 |            |
+
+## Performance Gaps vs libgit2
+
+Operations where muongit is **>5x slower** than libgit2 (sorted by gap):
+
+| Operation                 | Lang     | muongit (ms) | libgit2 (ms) |    Ratio |
+| ------------------------- | -------- | ------------:| ------------:| --------:|
+| index_rw_10k              | kotlin   |       57,108 |       10.046 |    5685x |
+| sha1_10mb                 | swift    |       13,511 |        9.784 |    1381x |
+| sha1_10mb                 | rust     |       13,344 |        9.784 |    1364x |
+| index_rw_1k               | kotlin   |      431.472 |        1.155 |     373x |
+| sha1_10kb                 | kotlin   |        3.338 |        0.028 |     118x |
+| sha1_1mb                  | swift    |      113.130 |        1.032 |     110x |
+| sha1_1mb                  | rust     |      111.443 |        1.032 |     108x |
+| commit_serialize_10k      | swift    |      148.013 |        3.421 |      43x |
+| index_rw_10k              | rust     |      195.959 |       10.046 |      20x |
+| index_rw_10k              | swift    |      181.439 |       10.046 |      18x |
+| commit_serialize_10k      | kotlin   |       48.158 |        3.421 |      14x |
+| oid_create_1k             | kotlin   |        1.914 |        0.149 |      13x |
+| tree_serialize_10k        | rust     |       10.706 |        0.929 |      12x |
+| tree_serialize_1k         | rust     |        1.005 |        0.088 |      11x |
+| blob_hash_1k              | kotlin   |        1.482 |        0.154 |      10x |
+| oid_create_100k           | rust     |      127.753 |       15.804 |       8x |
+| oid_create_10k            | rust     |       12.937 |        1.611 |       8x |
+| blob_hash_10k             | rust     |       12.771 |        1.643 |       8x |
+| tree_serialize_1k         | swift    |        0.548 |        0.088 |       6x |
+| tree_serialize_10k        | swift    |        5.425 |        0.929 |       6x |
+| oid_cmp_256x16k           | swift    |       34.091 |        5.875 |       6x |
+
+## Where muongit matches or beats libgit2
+
+Operations where muongit is **within 2x** of libgit2:
+
+| Operation                 | Lang     | muongit (ms) | libgit2 (ms) |    Ratio |
+| ------------------------- | -------- | ------------:| ------------:| --------:|
+| oid_cmp_256x16k           | rust     |       <0.001 |        5.875 |     0.0x |
+| oid_cmp_256x16k           | kotlin   |        7.529 |        5.875 |     1.3x |
+| sha1_10kb                 | swift    |        0.047 |        0.028 |     1.7x |
+
+---
+
+*Generated by `benchmarks/generate-report.py` on 2026-03-18 16:25:45*
