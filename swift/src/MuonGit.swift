@@ -60,6 +60,28 @@ public struct OID: Hashable, Sendable {
         raw.map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Initialize from a raw pointer without copying to an intermediate array
+    init(unsafeRawPointer ptr: UnsafePointer<UInt8>, count: Int) {
+        self.size = UInt8(count)
+        var la: UInt64 = 0, lb: UInt64 = 0, lc: UInt64 = 0, ld: UInt64 = 0
+        if count >= 8 { withUnsafeMutableBytes(of: &la) { $0.copyBytes(from: UnsafeRawBufferPointer(start: ptr, count: 8)) } }
+        if count >= 16 { withUnsafeMutableBytes(of: &lb) { $0.copyBytes(from: UnsafeRawBufferPointer(start: ptr + 8, count: 8)) } }
+        if count >= 20 && count < 24 {
+            withUnsafeMutableBytes(of: &lc) { $0.copyBytes(from: UnsafeRawBufferPointer(start: ptr + 16, count: count - 16)) }
+        }
+        if count >= 24 { withUnsafeMutableBytes(of: &lc) { $0.copyBytes(from: UnsafeRawBufferPointer(start: ptr + 16, count: 8)) } }
+        if count >= 32 { withUnsafeMutableBytes(of: &ld) { $0.copyBytes(from: UnsafeRawBufferPointer(start: ptr + 24, count: 8)) } }
+        self.a = la; self.b = lb; self.c = lc; self.d = ld
+    }
+
+    /// Append raw OID bytes directly to a Data buffer (avoids intermediate array)
+    func appendRawBytes(to data: inout Data) {
+        var copy = self
+        withUnsafeBytes(of: &copy) { ptr in
+            data.append(ptr.baseAddress!.assumingMemoryBound(to: UInt8.self), count: Int(size))
+        }
+    }
+
     public static func == (lhs: OID, rhs: OID) -> Bool {
         lhs.a == rhs.a && lhs.b == rhs.b && lhs.c == rhs.c && lhs.d == rhs.d
     }

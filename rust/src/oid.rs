@@ -23,6 +23,11 @@ impl OID {
     pub fn raw(&self) -> &[u8] {
         &self.raw
     }
+
+    /// Create OID directly from raw bytes (no hex conversion)
+    pub fn new(raw: Vec<u8>) -> Self {
+        Self { raw }
+    }
 }
 
 impl std::fmt::Debug for OID {

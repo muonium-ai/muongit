@@ -37,34 +37,42 @@ pub struct Tree {
     pub entries: Vec<TreeEntry>,
 }
 
+/// Fast inline octal parse from bytes (no string allocation)
+#[inline]
+fn parse_octal(bytes: &[u8]) -> u32 {
+    let mut val: u32 = 0;
+    for &b in bytes {
+        val = val.wrapping_mul(8).wrapping_add((b - b'0') as u32);
+    }
+    val
+}
+
 /// Parse a tree object from its raw binary data
 pub fn parse_tree(oid: OID, data: &[u8]) -> Result<Tree, MuonGitError> {
     let mut entries = Vec::new();
+    let len = data.len();
     let mut i = 0;
 
-    while i < data.len() {
+    while i < len {
         // Parse mode (octal digits until space)
         let mode_start = i;
-        while i < data.len() && data[i] != b' ' {
+        while i < len && data[i] != b' ' {
             i += 1;
         }
-        if i >= data.len() {
+        if i >= len {
             return Err(MuonGitError::InvalidObject(
                 "tree entry: missing space after mode".into(),
             ));
         }
-        let mode_str = std::str::from_utf8(&data[mode_start..i])
-            .map_err(|_| MuonGitError::InvalidObject("tree entry: invalid mode".into()))?;
-        let mode = u32::from_str_radix(mode_str, 8)
-            .map_err(|_| MuonGitError::InvalidObject(format!("tree entry: invalid mode '{}'", mode_str)))?;
+        let mode = parse_octal(&data[mode_start..i]);
         i += 1; // skip space
 
         // Parse name (until null byte)
         let name_start = i;
-        while i < data.len() && data[i] != 0 {
+        while i < len && data[i] != 0 {
             i += 1;
         }
-        if i >= data.len() {
+        if i >= len {
             return Err(MuonGitError::InvalidObject(
                 "tree entry: missing null after name".into(),
             ));
@@ -75,7 +83,7 @@ pub fn parse_tree(oid: OID, data: &[u8]) -> Result<Tree, MuonGitError> {
         i += 1; // skip null
 
         // Read 20-byte raw OID
-        if i + 20 > data.len() {
+        if i + 20 > len {
             return Err(MuonGitError::InvalidObject(
                 "tree entry: truncated OID".into(),
             ));
@@ -93,34 +101,46 @@ pub fn parse_tree(oid: OID, data: &[u8]) -> Result<Tree, MuonGitError> {
     Ok(Tree { oid, entries })
 }
 
+/// Return the octal mode string bytes for common git modes (no allocation).
+#[inline]
+fn mode_bytes(mode: u32) -> &'static [u8] {
+    match mode {
+        0o100644 => b"100644",
+        0o040000 => b"40000",
+        0o100755 => b"100755",
+        0o120000 => b"120000",
+        0o160000 => b"160000",
+        _ => b"",
+    }
+}
+
 /// Serialize tree entries to raw binary data (without the object header).
 /// Entries are sorted by name with tree-sorting rules.
 pub fn serialize_tree(entries: &[TreeEntry]) -> Vec<u8> {
     let mut sorted: Vec<&TreeEntry> = entries.iter().collect();
     sorted.sort_by(|a, b| {
-        let a_key = if a.is_tree() {
-            format!("{}/", a.name)
-        } else {
-            a.name.clone()
-        };
-        let b_key = if b.is_tree() {
-            format!("{}/", b.name)
-        } else {
-            b.name.clone()
-        };
-        a_key.cmp(&b_key)
+        // Compare without allocation: append '/' byte for trees during comparison
+        let a_name = a.name.as_bytes();
+        let b_name = b.name.as_bytes();
+        let a_trail: &[u8] = if a.is_tree() { b"/" } else { b"" };
+        let b_trail: &[u8] = if b.is_tree() { b"/" } else { b"" };
+        a_name.iter().chain(a_trail).cmp(b_name.iter().chain(b_trail))
     });
 
-    let mut buf = Vec::new();
+    // Pre-allocate: each entry is ~28 bytes (6 mode + 1 space + ~12 name + 1 null + 20 oid)
+    let mut buf = Vec::with_capacity(entries.len() * 40);
     for entry in sorted {
-        // Mode as octal string
-        let mode_str = format!("{:o}", entry.mode);
-        buf.extend_from_slice(mode_str.as_bytes());
+        let mb = mode_bytes(entry.mode);
+        if !mb.is_empty() {
+            buf.extend_from_slice(mb);
+        } else {
+            // Fallback for uncommon modes
+            let mode_str = format!("{:o}", entry.mode);
+            buf.extend_from_slice(mode_str.as_bytes());
+        }
         buf.push(b' ');
-        // Name
         buf.extend_from_slice(entry.name.as_bytes());
         buf.push(0);
-        // Raw 20-byte OID
         buf.extend_from_slice(entry.oid.raw());
     }
     buf

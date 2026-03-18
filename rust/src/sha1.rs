@@ -67,10 +67,9 @@ impl crate::OID {
         Self::from_bytes(vec![0u8; Self::SHA1_LENGTH])
     }
 
-    /// Create OID from raw bytes
+    /// Create OID from raw bytes (direct, no hex round-trip)
     pub fn from_bytes(raw: Vec<u8>) -> Self {
-        let hex = raw.iter().map(|b| format!("{:02x}", b)).collect::<String>();
-        Self::from_hex(&hex).unwrap()
+        Self::new(raw)
     }
 }
 

@@ -60,6 +60,16 @@ fun parseTree(oid: OID, data: ByteArray): Tree {
     return Tree(oid = oid, entries = entries)
 }
 
+/** Pre-computed octal mode bytes for common git modes */
+private fun modeBytes(mode: Int): ByteArray? = when (mode) {
+    0x81A4 -> byteArrayOf(0x31,0x30,0x30,0x36,0x34,0x34) // "100644"
+    0x4000 -> byteArrayOf(0x34,0x30,0x30,0x30,0x30)       // "40000"
+    0x81ED -> byteArrayOf(0x31,0x30,0x30,0x37,0x35,0x35) // "100755"
+    0xA000.toInt() -> byteArrayOf(0x31,0x32,0x30,0x30,0x30,0x30) // "120000"
+    0xE000.toInt() -> byteArrayOf(0x31,0x36,0x30,0x30,0x30,0x30) // "160000"
+    else -> null
+}
+
 /** Serialize tree entries to raw binary data (without the object header).
  *  Entries are sorted by name with tree-sorting rules. */
 fun serializeTree(entries: List<TreeEntry>): ByteArray {
@@ -67,16 +77,18 @@ fun serializeTree(entries: List<TreeEntry>): ByteArray {
         if (entry.isTree) "${entry.name}/" else entry.name
     }
 
-    val buf = java.io.ByteArrayOutputStream()
+    // Pre-allocate: each entry ~28 bytes
+    val buf = java.io.ByteArrayOutputStream(entries.size * 40)
     for (entry in sorted) {
-        // Mode as octal string
-        val modeStr = entry.mode.toString(8)
-        buf.write(modeStr.toByteArray(Charsets.UTF_8))
+        val mb = modeBytes(entry.mode)
+        if (mb != null) {
+            buf.write(mb)
+        } else {
+            buf.write(entry.mode.toString(8).toByteArray(Charsets.UTF_8))
+        }
         buf.write(0x20) // space
-        // Name
         buf.write(entry.name.toByteArray(Charsets.UTF_8))
         buf.write(0x00) // null
-        // Raw 20-byte OID
         buf.write(entry.oid.raw)
     }
     return buf.toByteArray()
