@@ -13,6 +13,7 @@ pub mod tree;
 pub mod blob;
 pub mod tag;
 pub mod config;
+pub mod reflog;
 
 pub use oid::OID;
 pub use types::{ObjectType, Signature};

@@ -827,4 +827,75 @@ class MuonGitTest {
             tmp.deleteRecursively()
         }
     }
+
+    // Reflog Tests
+
+    @Test
+    fun testParseReflogEntry() {
+        val content = "0000000000000000000000000000000000000000 aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d Test <test@test.com> 1234567890 +0000\tcommit (initial): first commit\n"
+        val entries = parseReflog(content)
+        assertEquals(1, entries.size)
+        assertTrue(entries[0].oldOid.isZero)
+        assertEquals("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d", entries[0].newOid.hex)
+        assertEquals("Test", entries[0].committer.name)
+        assertEquals("commit (initial): first commit", entries[0].message)
+    }
+
+    @Test
+    fun testAppendAndReadReflog() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_reflog_rw")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val zero = OID.ZERO
+            val oid1 = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            val oid2 = OID("bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            val sig = Signature(name = "Test", email = "t@t.com", time = 100L, offset = 0)
+
+            appendReflog(repo.gitDir, "HEAD", zero, oid1, sig, "commit (initial): first")
+            appendReflog(repo.gitDir, "HEAD", oid1, oid2, sig, "commit: second")
+
+            val entries = readReflog(repo.gitDir, "HEAD")
+            assertEquals(2, entries.size)
+            assertTrue(entries[0].oldOid.isZero)
+            assertEquals(oid1, entries[0].newOid)
+            assertEquals("commit (initial): first", entries[0].message)
+            assertEquals(oid1, entries[1].oldOid)
+            assertEquals(oid2, entries[1].newOid)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testReadNonexistentReflog() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_reflog_empty")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val entries = readReflog(repo.gitDir, "HEAD")
+            assertTrue(entries.isEmpty())
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testReflogForBranch() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_reflog_branch")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            val sig = Signature(name = "T", email = "t@t", time = 0L, offset = 0)
+
+            appendReflog(repo.gitDir, "refs/heads/main", OID.ZERO, oid, sig, "branch: Created")
+
+            val entries = readReflog(repo.gitDir, "refs/heads/main")
+            assertEquals(1, entries.size)
+            assertEquals("branch: Created", entries[0].message)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
 }

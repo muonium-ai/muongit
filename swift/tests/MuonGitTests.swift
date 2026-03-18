@@ -721,4 +721,65 @@ final class MuonGitTests: XCTestCase {
         let config = try Config.load(from: configPath)
         XCTAssertEqual(config.getBool(section: "core", key: "bare"), false)
     }
+
+    // MARK: - Reflog Tests
+
+    func testParseReflogEntry() {
+        let content = "0000000000000000000000000000000000000000 aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d Test <test@test.com> 1234567890 +0000\tcommit (initial): first commit\n"
+        let entries = parseReflog(content)
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertTrue(entries[0].oldOid.isZero)
+        XCTAssertEqual(entries[0].newOid.hex, "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        XCTAssertEqual(entries[0].committer.name, "Test")
+        XCTAssertEqual(entries[0].message, "commit (initial): first commit")
+    }
+
+    func testAppendAndReadReflog() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_reflog_rw"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let zero = OID.zero
+        let oid1 = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let oid2 = OID(hex: "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let sig = Signature(name: "Test", email: "t@t.com", time: 100, offset: 0)
+
+        try appendReflog(gitDir: repo.gitDir, refName: "HEAD", oldOid: zero, newOid: oid1, committer: sig, message: "commit (initial): first")
+        try appendReflog(gitDir: repo.gitDir, refName: "HEAD", oldOid: oid1, newOid: oid2, committer: sig, message: "commit: second")
+
+        let entries = try readReflog(gitDir: repo.gitDir, refName: "HEAD")
+        XCTAssertEqual(entries.count, 2)
+        XCTAssertTrue(entries[0].oldOid.isZero)
+        XCTAssertEqual(entries[0].newOid, oid1)
+        XCTAssertEqual(entries[0].message, "commit (initial): first")
+        XCTAssertEqual(entries[1].oldOid, oid1)
+        XCTAssertEqual(entries[1].newOid, oid2)
+    }
+
+    func testReadNonexistentReflog() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_reflog_empty"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let entries = try readReflog(gitDir: repo.gitDir, refName: "HEAD")
+        XCTAssertTrue(entries.isEmpty)
+    }
+
+    func testReflogForBranch() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_reflog_branch"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let sig = Signature(name: "T", email: "t@t", time: 0, offset: 0)
+
+        try appendReflog(gitDir: repo.gitDir, refName: "refs/heads/main", oldOid: OID.zero, newOid: oid, committer: sig, message: "branch: Created")
+
+        let entries = try readReflog(gitDir: repo.gitDir, refName: "refs/heads/main")
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries[0].message, "branch: Created")
+    }
 }
