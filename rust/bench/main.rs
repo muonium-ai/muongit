@@ -11,6 +11,16 @@ use muongit::diff::diff_trees;
 
 use std::time::Instant;
 
+/// Return a base temp directory that works both in-tree (cargo) and standalone.
+fn bench_tmp_dir() -> std::path::PathBuf {
+    // Prefer a sibling `tmp/` next to the running binary, fall back to `./tmp/`.
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("tmp")
+}
+
 /// Run a benchmark: warm up, then measure `iterations` runs.
 /// Returns (min_ms, mean_ms, median_ms).
 fn bench<F: FnMut()>(name: &str, iterations: usize, warmup: usize, mut f: F) {
@@ -158,7 +168,7 @@ fn main() {
     });
 
     // Index read/write 1K
-    let tmp = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tmp/bench_index_1k");
+    let tmp = bench_tmp_dir().join("bench_index_1k");
     let _ = std::fs::remove_dir_all(&tmp);
     let repo = Repository::init(tmp.to_str().unwrap(), false).unwrap();
     let mut index = Index::new();
@@ -176,7 +186,7 @@ fn main() {
     });
 
     // Index read/write 10K
-    let tmp10 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tmp/bench_index_10k");
+    let tmp10 = bench_tmp_dir().join("bench_index_10k");
     let _ = std::fs::remove_dir_all(&tmp10);
     let repo10 = Repository::init(tmp10.to_str().unwrap(), false).unwrap();
     let mut index10 = Index::new();
