@@ -727,4 +727,104 @@ class MuonGitTest {
             tmp.deleteRecursively()
         }
     }
+
+    // Config Tests
+
+    @Test
+    fun testParseSimpleConfig() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_config_parse")
+        tmp.deleteRecursively()
+        tmp.mkdirs()
+        try {
+            val configFile = java.io.File(tmp, "config")
+            configFile.writeText("[core]\n\tbare = false\n\trepositoryformatversion = 0\n")
+
+            val config = Config.load(configFile.path)
+            assertEquals("false", config.get("core", "bare"))
+            assertEquals(false, config.getBool("core", "bare"))
+            assertEquals(0, config.getInt("core", "repositoryformatversion"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testConfigSubsection() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_config_sub")
+        tmp.deleteRecursively()
+        tmp.mkdirs()
+        try {
+            val configFile = java.io.File(tmp, "config")
+            configFile.writeText("[remote \"origin\"]\n\turl = https://example.com/repo.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n")
+
+            val config = Config.load(configFile.path)
+            assertEquals("https://example.com/repo.git", config.get("remote.origin", "url"))
+            assertEquals("+refs/heads/*:refs/remotes/origin/*", config.get("remote.origin", "fetch"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testConfigSetAndUnset() {
+        val config = Config()
+        config.set("core", "bare", "true")
+        assertEquals("true", config.get("core", "bare"))
+
+        config.set("core", "bare", "false")
+        assertEquals("false", config.get("core", "bare"))
+
+        config.unset("core", "bare")
+        assertNull(config.get("core", "bare"))
+    }
+
+    @Test
+    fun testConfigCaseInsensitive() {
+        val config = Config()
+        config.set("Core", "Bare", "true")
+        assertEquals("true", config.get("core", "bare"))
+        assertEquals("true", config.get("CORE", "BARE"))
+    }
+
+    @Test
+    fun testConfigIntSuffixes() {
+        assertEquals(42, parseConfigInt("42"))
+        assertEquals(1024, parseConfigInt("1k"))
+        assertEquals(2 * 1024 * 1024, parseConfigInt("2m"))
+        assertEquals(1024 * 1024 * 1024, parseConfigInt("1g"))
+    }
+
+    @Test
+    fun testConfigRoundTrip() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_config_rt")
+        tmp.deleteRecursively()
+        tmp.mkdirs()
+        try {
+            val configFile = java.io.File(tmp, "config")
+            val config = Config(configFile.path)
+            config.set("core", "bare", "false")
+            config.set("core", "repositoryformatversion", "0")
+            config.set("remote.origin", "url", "https://example.com/repo.git")
+            config.save()
+
+            val loaded = Config.load(configFile.path)
+            assertEquals("false", loaded.get("core", "bare"))
+            assertEquals("https://example.com/repo.git", loaded.get("remote.origin", "url"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testRepoConfig() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_config_repo")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val config = Config.load(java.io.File(repo.gitDir, "config").path)
+            assertEquals(false, config.getBool("core", "bare"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
 }

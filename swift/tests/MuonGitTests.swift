@@ -633,4 +633,92 @@ final class MuonGitTests: XCTestCase {
         // Create-only should fail if exists
         XCTAssertThrowsError(try updateReference(gitDir: repo.gitDir, name: "refs/heads/feature", newOid: oid2, oldOid: OID.zero))
     }
+
+    // MARK: - Config Tests
+
+    func testParseSimpleConfig() throws {
+        let content = "[core]\n\tbare = false\n\trepositoryformatversion = 0\n"
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_config_parse"
+        try? FileManager.default.removeItem(atPath: tmp)
+        try FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let configPath = (tmp as NSString).appendingPathComponent("config")
+        try content.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+        let config = try Config.load(from: configPath)
+        XCTAssertEqual(config.get(section: "core", key: "bare"), "false")
+        XCTAssertEqual(config.getBool(section: "core", key: "bare"), false)
+        XCTAssertEqual(config.getInt(section: "core", key: "repositoryformatversion"), 0)
+    }
+
+    func testConfigSubsection() throws {
+        let content = "[remote \"origin\"]\n\turl = https://example.com/repo.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n"
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_config_sub"
+        try? FileManager.default.removeItem(atPath: tmp)
+        try FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let configPath = (tmp as NSString).appendingPathComponent("config")
+        try content.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+        let config = try Config.load(from: configPath)
+        XCTAssertEqual(config.get(section: "remote.origin", key: "url"), "https://example.com/repo.git")
+        XCTAssertEqual(config.get(section: "remote.origin", key: "fetch"), "+refs/heads/*:refs/remotes/origin/*")
+    }
+
+    func testConfigSetAndUnset() {
+        let config = Config()
+        config.set(section: "core", key: "bare", value: "true")
+        XCTAssertEqual(config.get(section: "core", key: "bare"), "true")
+
+        config.set(section: "core", key: "bare", value: "false")
+        XCTAssertEqual(config.get(section: "core", key: "bare"), "false")
+
+        config.unset(section: "core", key: "bare")
+        XCTAssertNil(config.get(section: "core", key: "bare"))
+    }
+
+    func testConfigCaseInsensitive() {
+        let config = Config()
+        config.set(section: "Core", key: "Bare", value: "true")
+        XCTAssertEqual(config.get(section: "core", key: "bare"), "true")
+        XCTAssertEqual(config.get(section: "CORE", key: "BARE"), "true")
+    }
+
+    func testConfigIntSuffixes() {
+        XCTAssertEqual(parseConfigInt("42"), 42)
+        XCTAssertEqual(parseConfigInt("1k"), 1024)
+        XCTAssertEqual(parseConfigInt("2m"), 2 * 1024 * 1024)
+        XCTAssertEqual(parseConfigInt("1g"), 1024 * 1024 * 1024)
+    }
+
+    func testConfigRoundTrip() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_config_rt"
+        try? FileManager.default.removeItem(atPath: tmp)
+        try FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let configPath = (tmp as NSString).appendingPathComponent("config")
+        let config = Config(path: configPath)
+        config.set(section: "core", key: "bare", value: "false")
+        config.set(section: "core", key: "repositoryformatversion", value: "0")
+        config.set(section: "remote.origin", key: "url", value: "https://example.com/repo.git")
+        try config.save()
+
+        let loaded = try Config.load(from: configPath)
+        XCTAssertEqual(loaded.get(section: "core", key: "bare"), "false")
+        XCTAssertEqual(loaded.get(section: "remote.origin", key: "url"), "https://example.com/repo.git")
+    }
+
+    func testRepoConfig() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_config_repo"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let configPath = (repo.gitDir as NSString).appendingPathComponent("config")
+        let config = try Config.load(from: configPath)
+        XCTAssertEqual(config.getBool(section: "core", key: "bare"), false)
+    }
 }
