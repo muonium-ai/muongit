@@ -47,10 +47,14 @@ jobs:
       - run: cargo test
       - name: Package artifact
         run: |
+          mkdir -p staging
+          cp target/release/muongit-bench staging/
+          cp target/release/libmuongit.rlib staging/ 2>/dev/null || true
+          cp target/release/libmuongit.a staging/ 2>/dev/null || true
+          cp target/release/libmuongit.so staging/ 2>/dev/null || true
+          cp target/release/libmuongit.dylib staging/ 2>/dev/null || true
           mkdir -p ../artifacts
-          tar czf ../artifacts/${{ matrix.artifact }}.tar.gz \
-            -C target/release \
-            $(ls target/release/libmuongit.* target/release/muongit target/release/muongit-bench 2>/dev/null | xargs -I{} basename {})
+          tar czf ../artifacts/${{ matrix.artifact }}.tar.gz -C staging .
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
