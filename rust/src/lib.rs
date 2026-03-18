@@ -14,6 +14,7 @@ pub mod blob;
 pub mod tag;
 pub mod config;
 pub mod reflog;
+pub mod index;
 
 pub use oid::OID;
 pub use types::{ObjectType, Signature};

@@ -782,4 +782,98 @@ final class MuonGitTests: XCTestCase {
         XCTAssertEqual(entries.count, 1)
         XCTAssertEqual(entries[0].message, "branch: Created")
     }
+
+    // MARK: - Index Tests
+
+    func testReadWriteEmptyIndex() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_index_empty"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let index = Index()
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        let loaded = try readIndex(gitDir: repo.gitDir)
+        XCTAssertEqual(loaded.version, 2)
+        XCTAssertTrue(loaded.entries.isEmpty)
+    }
+
+    func testReadWriteSingleEntry() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_index_single"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let oid = OID(hex: "ce013625030ba8dba906f756967f9e9ca394464a")
+        let entry = IndexEntry(mode: 0o100644, fileSize: 6, oid: oid, path: "hello.txt")
+
+        var index = Index()
+        index.add(entry)
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        let loaded = try readIndex(gitDir: repo.gitDir)
+        XCTAssertEqual(loaded.entries.count, 1)
+        XCTAssertEqual(loaded.entries[0].path, "hello.txt")
+        XCTAssertEqual(loaded.entries[0].mode, 0o100644)
+        XCTAssertEqual(loaded.entries[0].oid, oid)
+        XCTAssertEqual(loaded.entries[0].fileSize, 6)
+        XCTAssertEqual(loaded.entries[0].flags & 0xFFF, 9) // "hello.txt".count
+    }
+
+    func testReadWriteMultipleEntriesSorted() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_index_multi"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+        var index = Index()
+        index.add(IndexEntry(mode: 0o100644, oid: oid, path: "z.txt"))
+        index.add(IndexEntry(mode: 0o100644, oid: oid, path: "a.txt"))
+        index.add(IndexEntry(mode: 0o100644, oid: oid, path: "lib/main.c"))
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        let loaded = try readIndex(gitDir: repo.gitDir)
+        XCTAssertEqual(loaded.entries.count, 3)
+        XCTAssertEqual(loaded.entries[0].path, "a.txt")
+        XCTAssertEqual(loaded.entries[1].path, "lib/main.c")
+        XCTAssertEqual(loaded.entries[2].path, "z.txt")
+    }
+
+    func testIndexAddRemoveFind() {
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        var index = Index()
+        index.add(IndexEntry(mode: 0o100644, oid: oid, path: "foo.txt"))
+        index.add(IndexEntry(mode: 0o100644, oid: oid, path: "bar.txt"))
+
+        XCTAssertNotNil(index.find(path: "foo.txt"))
+        XCTAssertNil(index.find(path: "nonexistent"))
+
+        XCTAssertTrue(index.remove(path: "foo.txt"))
+        XCTAssertFalse(index.remove(path: "foo.txt"))
+        XCTAssertNil(index.find(path: "foo.txt"))
+        XCTAssertEqual(index.entries.count, 1)
+    }
+
+    func testIndexChecksumValidation() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_index_checksum"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        var index = Index()
+        index.add(IndexEntry(mode: 0o100644, fileSize: 10, oid: oid, path: "test.txt"))
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        // Corrupt the data
+        let indexPath = (repo.gitDir as NSString).appendingPathComponent("index")
+        var data = Array(try Data(contentsOf: URL(fileURLWithPath: indexPath)))
+        data[20] ^= 0xFF
+        try Data(data).write(to: URL(fileURLWithPath: indexPath))
+
+        XCTAssertThrowsError(try readIndex(gitDir: repo.gitDir))
+    }
 }

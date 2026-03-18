@@ -898,4 +898,113 @@ class MuonGitTest {
             tmp.deleteRecursively()
         }
     }
+
+    // Index Tests
+
+    @Test
+    fun testReadWriteEmptyIndex() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_index_empty")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val index = Index()
+            writeIndex(repo.gitDir, index)
+
+            val loaded = readIndex(repo.gitDir)
+            assertEquals(2, loaded.version)
+            assertTrue(loaded.entries.isEmpty())
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testReadWriteSingleEntry() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_index_single")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val oid = OID("ce013625030ba8dba906f756967f9e9ca394464a")
+            val entry = IndexEntry(mode = 33188, fileSize = 6, oid = oid, path = "hello.txt")
+
+            val index = Index()
+            index.add(entry)
+            writeIndex(repo.gitDir, index)
+
+            val loaded = readIndex(repo.gitDir)
+            assertEquals(1, loaded.entries.size)
+            assertEquals("hello.txt", loaded.entries[0].path)
+            assertEquals(33188, loaded.entries[0].mode) // 0o100644
+            assertEquals(oid, loaded.entries[0].oid)
+            assertEquals(6, loaded.entries[0].fileSize)
+            assertEquals(9, loaded.entries[0].flags and 0xFFF) // "hello.txt".length
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testReadWriteMultipleEntriesSorted() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_index_multi")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+            val index = Index()
+            index.add(IndexEntry(mode = 33188, oid = oid, path = "z.txt"))
+            index.add(IndexEntry(mode = 33188, oid = oid, path = "a.txt"))
+            index.add(IndexEntry(mode = 33188, oid = oid, path = "lib/main.c"))
+            writeIndex(repo.gitDir, index)
+
+            val loaded = readIndex(repo.gitDir)
+            assertEquals(3, loaded.entries.size)
+            assertEquals("a.txt", loaded.entries[0].path)
+            assertEquals("lib/main.c", loaded.entries[1].path)
+            assertEquals("z.txt", loaded.entries[2].path)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testIndexAddRemoveFind() {
+        val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val index = Index()
+        index.add(IndexEntry(mode = 33188, oid = oid, path = "foo.txt"))
+        index.add(IndexEntry(mode = 33188, oid = oid, path = "bar.txt"))
+
+        assertNotNull(index.find("foo.txt"))
+        assertNull(index.find("nonexistent"))
+
+        assertTrue(index.remove("foo.txt"))
+        assertTrue(!index.remove("foo.txt"))
+        assertNull(index.find("foo.txt"))
+        assertEquals(1, index.entries.size)
+    }
+
+    @Test
+    fun testIndexChecksumValidation() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_index_checksum")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            val index = Index()
+            index.add(IndexEntry(mode = 33188, fileSize = 10, oid = oid, path = "test.txt"))
+            writeIndex(repo.gitDir, index)
+
+            // Corrupt the data
+            val indexFile = java.io.File(repo.gitDir, "index")
+            val data = indexFile.readBytes()
+            data[20] = (data[20].toInt() xor 0xFF).toByte()
+            indexFile.writeBytes(data)
+
+            assertFailsWith<MuonGitException.InvalidObject> {
+                readIndex(repo.gitDir)
+            }
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
 }
