@@ -46,13 +46,17 @@ bench("sha256_10kb", iterations: 50, warmup: 5) {
 // OID compare 256x16K (matching libgit2 benchmark)
 let oidsA = (0..<256).map { OID.hash(type: .blob, data: Array("oid_a_\($0)".utf8)) }
 let oidsB = (0..<256).map { OID.hash(type: .blob, data: Array("oid_b_\($0)".utf8)) }
+var cmpSink = false
 bench("oid_cmp_256x16k", iterations: 10, warmup: 2) {
+    var acc = false
     for _ in 0..<16384 {
         for j in 0..<256 {
-            let _ = oidsA[j] == oidsB[j]
+            acc = acc || (oidsA[j] == oidsB[j])
         }
     }
+    cmpSink = acc
 }
+_ = cmpSink
 
 // SHA-1 1MB
 let data1mb = [UInt8](repeating: 0xAB, count: 1_000_000)

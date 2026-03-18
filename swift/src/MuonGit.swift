@@ -5,23 +5,70 @@ import Foundation
 // MARK: - Core Types
 
 /// Object identifier (SHA-1 / SHA-256)
+/// Uses fixed-size inline storage (like libgit2's git_oid) to avoid heap allocation.
 public struct OID: Hashable, Sendable {
-    public let raw: [UInt8]
+    // Fixed-size inline storage — 32 bytes max (SHA-256), stack-allocated
+    // SHA-1 uses first 20 bytes (a, b, c0); SHA-256 uses all 32 (a, b, c, d)
+    private let a: UInt64
+    private let b: UInt64
+    private let c: UInt64
+    private let d: UInt64
+    private let size: UInt8  // 20 for SHA-1, 32 for SHA-256
+
+    public var raw: [UInt8] {
+        let count = Int(size)
+        var result = [UInt8](repeating: 0, count: count)
+        withUnsafeBytes(of: a) { src in for i in 0..<min(8, count) { result[i] = src[i] } }
+        if count > 8 { withUnsafeBytes(of: b) { src in for i in 0..<min(8, count - 8) { result[8 + i] = src[i] } } }
+        if count > 16 { withUnsafeBytes(of: c) { src in for i in 0..<min(8, count - 16) { result[16 + i] = src[i] } } }
+        if count > 24 { withUnsafeBytes(of: d) { src in for i in 0..<min(8, count - 24) { result[24 + i] = src[i] } } }
+        return result
+    }
 
     public init(raw: [UInt8]) {
-        self.raw = raw
+        self.size = UInt8(raw.count)
+        var la: UInt64 = 0, lb: UInt64 = 0, lc: UInt64 = 0, ld: UInt64 = 0
+        raw.withUnsafeBufferPointer { ptr in
+            let base = ptr.baseAddress!
+            let n = ptr.count
+            if n >= 8 { withUnsafeMutableBytes(of: &la) { $0.copyBytes(from: UnsafeRawBufferPointer(start: base, count: 8)) } }
+            if n >= 16 { withUnsafeMutableBytes(of: &lb) { $0.copyBytes(from: UnsafeRawBufferPointer(start: base + 8, count: 8)) } }
+            if n >= 24 { withUnsafeMutableBytes(of: &lc) { $0.copyBytes(from: UnsafeRawBufferPointer(start: base + 16, count: min(8, n - 16))) } }
+            if n >= 32 { withUnsafeMutableBytes(of: &ld) { $0.copyBytes(from: UnsafeRawBufferPointer(start: base + 24, count: 8)) } }
+            // Handle 20-byte SHA-1: copy remaining 4 bytes into lc
+            if n >= 20 && n < 24 {
+                withUnsafeMutableBytes(of: &lc) { $0.copyBytes(from: UnsafeRawBufferPointer(start: base + 16, count: n - 16)) }
+            }
+        }
+        self.a = la; self.b = lb; self.c = lc; self.d = ld
     }
 
     public init(hex: String) {
-        self.raw = stride(from: 0, to: hex.count, by: 2).compactMap {
+        let bytes: [UInt8] = stride(from: 0, to: hex.count, by: 2).compactMap {
             let start = hex.index(hex.startIndex, offsetBy: $0)
             let end = hex.index(start, offsetBy: 2)
             return UInt8(hex[start..<end], radix: 16)
         }
+        self.init(raw: bytes)
+    }
+
+    init(data: Data) {
+        self.init(raw: Array(data))
     }
 
     public var hex: String {
         raw.map { String(format: "%02x", $0) }.joined()
+    }
+
+    public static func == (lhs: OID, rhs: OID) -> Bool {
+        lhs.a == rhs.a && lhs.b == rhs.b && lhs.c == rhs.c && lhs.d == rhs.d
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(a)
+        hasher.combine(b)
+        hasher.combine(c)
+        hasher.combine(d)
     }
 }
 
