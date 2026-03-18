@@ -2167,7 +2167,7 @@ class MuonGitTest {
         val data = ByteArray(1_000_000) { 0xAB.toByte() }
         val ms = measureMs { SHA1.hash(data) }
         println("[perf] SHA-1 1MB: ${"%.2f".format(ms)}ms")
-        assertTrue(ms < 120000.0, "SHA-1 1MB took ${ms}ms, expected < 120000ms")
+        assertTrue(ms < 500.0, "SHA-1 1MB took ${ms}ms, expected < 120000ms")
     }
 
     @Test
@@ -2175,7 +2175,7 @@ class MuonGitTest {
         val data = ByteArray(1_000_000) { 0xAB.toByte() }
         val ms = measureMs { SHA256Hash.hash(data) }
         println("[perf] SHA-256 1MB: ${"%.2f".format(ms)}ms")
-        assertTrue(ms < 120000.0, "SHA-256 1MB took ${ms}ms, expected < 120000ms")
+        assertTrue(ms < 500.0, "SHA-256 1MB took ${ms}ms, expected < 120000ms")
     }
 
     @Test
@@ -2270,7 +2270,7 @@ class MuonGitTest {
         val msSha1 = measureMs { SHA1.hash(data) }
         val msSha256 = measureMs { SHA256Hash.hash(data) }
         println("[perf] SHA-1 1MB: ${"%.2f".format(msSha1)}ms, SHA-256 1MB: ${"%.2f".format(msSha256)}ms, ratio: ${"%.2f".format(msSha256 / msSha1.coerceAtLeast(0.001))}x")
-        assertTrue(msSha1 < 120000.0)
-        assertTrue(msSha256 < 120000.0)
+        assertTrue(msSha1 < 500.0)
+        assertTrue(msSha256 < 500.0)
     }
 }

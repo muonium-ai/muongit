@@ -8,6 +8,8 @@ repository = "https://github.com/muonium-ai/muongit"
 
 [dependencies]
 flate2 = "1.0"
+sha1_crate = { package = "sha1", version = "0.10" }
+sha2_crate = { package = "sha2", version = "0.10" }
 
 [[bin]]
 name = "muongit-bench"
