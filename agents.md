@@ -90,10 +90,39 @@ $MT set-status T-000042 needs_review
 $MT done T-000042
 ```
 
+### Archiving Completed Tickets
+```bash
+# Archive a done ticket (moves to tickets/archive/)
+$MT archive T-000042
+
+# Archive respects dependency safety — tickets with active dependents
+# cannot be archived without --force
+# Check which tickets are safe to archive:
+$MT ls --status done
+```
+
 ### Handling Failures
 ```bash
 # Record failure (auto-retries up to limit)
 $MT fail-task T-000042 --error "SHA-256 not yet available in stdlib"
+```
+
+### Useful mt.py Commands
+```bash
+MT="python3 tickets/mt/muontickets/muontickets/mt.py"
+
+$MT ls                          # List all active tickets
+$MT ls --status ready           # Filter by status
+$MT ls --label swift            # Filter by label
+$MT stats                       # Show status counts
+$MT show T-000042               # Show ticket details
+$MT new "Title" --label swift   # Create new ticket
+$MT claim T-000042 --owner agent-swift
+$MT comment T-000042 "progress note"
+$MT set-status T-000042 needs_review
+$MT done T-000042
+$MT archive T-000042
+$MT fail-task T-000042 --error "reason"
 ```
 
 ## Temp Directory

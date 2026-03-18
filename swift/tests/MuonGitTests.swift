@@ -130,6 +130,43 @@ final class MuonGitTests: XCTestCase {
         XCTAssertEqual(readData, blobData)
     }
 
+    func testWriteAndReadCommitObject() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_odb_commit"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let commitData = Data("tree 0000000000000000000000000000000000000000\nauthor Test <test@test.com> 0 +0000\ncommitter Test <test@test.com> 0 +0000\n\ntest commit\n".utf8)
+
+        let oid = try writeLooseObject(gitDir: repo.gitDir, type: .commit, data: commitData)
+        let (readType, readData) = try readLooseObject(gitDir: repo.gitDir, oid: oid)
+        XCTAssertEqual(readType, .commit)
+        XCTAssertEqual(readData, commitData)
+    }
+
+    func testWriteIdempotent() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_odb_idempotent"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let data = Data("idempotent test\n".utf8)
+
+        let oid1 = try writeLooseObject(gitDir: repo.gitDir, type: .blob, data: data)
+        let oid2 = try writeLooseObject(gitDir: repo.gitDir, type: .blob, data: data)
+        XCTAssertEqual(oid1, oid2)
+    }
+
+    func testReadNonexistentObject() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_odb_missing"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let fakeOid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        XCTAssertThrowsError(try readLooseObject(gitDir: repo.gitDir, oid: fakeOid))
+    }
+
     // MARK: - Refs Tests
 
     func testReadReference() throws {
@@ -148,12 +185,89 @@ final class MuonGitTests: XCTestCase {
         defer { try? FileManager.default.removeItem(atPath: tmp) }
 
         let repo = try Repository.create(at: tmp)
-        // HEAD points to refs/heads/main, but that ref doesn't exist yet (unborn)
         XCTAssertThrowsError(try resolveReference(gitDir: repo.gitDir, name: "HEAD")) { error in
             guard case MuonGitError.notFound = error else {
                 XCTFail("Expected MuonGitError.notFound, got \(error)")
                 return
             }
         }
+    }
+
+    func testResolveHeadWithCommit() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_refs_resolve"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let fakeOid = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        let refPath = (repo.gitDir as NSString).appendingPathComponent("refs/heads/main")
+        try fakeOid.write(toFile: refPath, atomically: true, encoding: .utf8)
+
+        let resolved = try resolveReference(gitDir: repo.gitDir, name: "HEAD")
+        XCTAssertEqual(resolved.hex, fakeOid)
+    }
+
+    func testPackedRefs() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_refs_packed"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let packedOid = "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        let packedContent = "# pack-refs with: peeled fully-peeled sorted\n\(packedOid) refs/tags/v1.0\n"
+        try packedContent.write(
+            toFile: (repo.gitDir as NSString).appendingPathComponent("packed-refs"),
+            atomically: true, encoding: .utf8
+        )
+
+        let tagValue = try readReference(gitDir: repo.gitDir, name: "refs/tags/v1.0")
+        XCTAssertEqual(tagValue, packedOid)
+    }
+
+    func testListReferences() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_refs_list"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let oid1 = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        let oid2 = "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+
+        let mainPath = (repo.gitDir as NSString).appendingPathComponent("refs/heads/main")
+        try oid1.write(toFile: mainPath, atomically: true, encoding: .utf8)
+
+        let featurePath = (repo.gitDir as NSString).appendingPathComponent("refs/heads/feature")
+        try oid2.write(toFile: featurePath, atomically: true, encoding: .utf8)
+
+        let refs = try listReferences(gitDir: repo.gitDir)
+        let refMap = Dictionary(uniqueKeysWithValues: refs)
+        XCTAssertEqual(refMap["refs/heads/main"], oid1)
+        XCTAssertEqual(refMap["refs/heads/feature"], oid2)
+    }
+
+    func testLooseOverridesPacked() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_refs_override"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let packedOid = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        let looseOid = "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+
+        try "# pack-refs\n\(packedOid) refs/tags/v1.0\n".write(
+            toFile: (repo.gitDir as NSString).appendingPathComponent("packed-refs"),
+            atomically: true, encoding: .utf8
+        )
+
+        let tagsDir = ((repo.gitDir as NSString).appendingPathComponent("refs") as NSString).appendingPathComponent("tags")
+        try FileManager.default.createDirectory(atPath: tagsDir, withIntermediateDirectories: true)
+        try looseOid.write(
+            toFile: (tagsDir as NSString).appendingPathComponent("v1.0"),
+            atomically: true, encoding: .utf8
+        )
+
+        let refs = try listReferences(gitDir: repo.gitDir)
+        let refMap = Dictionary(uniqueKeysWithValues: refs)
+        XCTAssertEqual(refMap["refs/tags/v1.0"], looseOid)
     }
 }

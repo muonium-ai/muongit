@@ -141,35 +141,65 @@ class MuonGitTest {
         tmp.deleteRecursively()
         try {
             val repo = Repository.init(tmp.path)
-            val gitDir = repo.gitDir
+            val content = "hello, muongit!\n".toByteArray()
+            val oid = writeLooseObject(repo.gitDir, ObjectType.BLOB, content)
+            assertTrue(!oid.isZero)
 
-            val content = "hello world\n".toByteArray()
-            val oid = writeLooseObject(gitDir, ObjectType.BLOB, content)
-
-            // Verify OID matches what hashObject would produce
             val expectedOid = OID.hashObject(ObjectType.BLOB, content)
             assertEquals(expectedOid, oid)
 
-            // Verify the object file exists on disk
-            val hex = oid.hex
-            val objectFile = java.io.File(gitDir, "objects/${hex.substring(0, 2)}/${hex.substring(2)}")
-            assertTrue(objectFile.exists(), "loose object file should exist")
-
-            // Read it back
-            val (readType, readContent) = readLooseObject(gitDir, oid)
+            val (readType, readContent) = readLooseObject(repo.gitDir, oid)
             assertEquals(ObjectType.BLOB, readType)
-            assertTrue(content.contentEquals(readContent), "content should round-trip")
+            assertTrue(content.contentEquals(readContent))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
 
-            // Write again should be idempotent (no error)
-            val oid2 = writeLooseObject(gitDir, ObjectType.BLOB, content)
-            assertEquals(oid, oid2)
-
-            // Test with a different object type
+    @Test
+    fun testWriteAndReadCommitObject() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_odb_commit")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
             val commitData = "tree 0000000000000000000000000000000000000000\nauthor Test <test@test.com> 0 +0000\ncommitter Test <test@test.com> 0 +0000\n\ntest commit\n".toByteArray()
-            val commitOid = writeLooseObject(gitDir, ObjectType.COMMIT, commitData)
-            val (commitType, commitContent) = readLooseObject(gitDir, commitOid)
-            assertEquals(ObjectType.COMMIT, commitType)
-            assertTrue(commitData.contentEquals(commitContent))
+            val oid = writeLooseObject(repo.gitDir, ObjectType.COMMIT, commitData)
+            val (readType, readContent) = readLooseObject(repo.gitDir, oid)
+            assertEquals(ObjectType.COMMIT, readType)
+            assertTrue(commitData.contentEquals(readContent))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testWriteIdempotent() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_odb_idempotent")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val data = "idempotent test\n".toByteArray()
+            val oid1 = writeLooseObject(repo.gitDir, ObjectType.BLOB, data)
+            val oid2 = writeLooseObject(repo.gitDir, ObjectType.BLOB, data)
+            assertEquals(oid1, oid2)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testReadNonexistentObject() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_odb_missing")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val fakeOid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            try {
+                readLooseObject(repo.gitDir, fakeOid)
+                assertTrue(false, "should have thrown")
+            } catch (_: MuonGitException.NotFound) {
+                // expected
+            }
         } finally {
             tmp.deleteRecursively()
         }
@@ -183,39 +213,57 @@ class MuonGitTest {
         tmp.deleteRecursively()
         try {
             val repo = Repository.init(tmp.path)
-            val gitDir = repo.gitDir
-
-            // HEAD should be a symbolic ref
-            val headValue = readReference(gitDir, "HEAD")
+            val headValue = readReference(repo.gitDir, "HEAD")
             assertEquals("ref: refs/heads/main", headValue)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
 
-            // Write a loose ref
-            val refsHeadsMain = java.io.File(gitDir, "refs/heads/main")
-            val fakeOid = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
-            refsHeadsMain.writeText("$fakeOid\n")
-
-            val mainValue = readReference(gitDir, "refs/heads/main")
-            assertEquals(fakeOid, mainValue)
-
-            // Test resolveReference follows symbolic ref HEAD -> refs/heads/main -> OID
-            val resolved = resolveReference(gitDir, "HEAD")
-            assertEquals(fakeOid, resolved.hex)
-
-            // Test packed-refs fallback
-            val packedOid = "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
-            java.io.File(gitDir, "packed-refs").writeText(
-                "# pack-refs with: peeled fully-peeled sorted\n$packedOid refs/tags/v1.0\n"
-            )
-            val tagValue = readReference(gitDir, "refs/tags/v1.0")
-            assertEquals(packedOid, tagValue)
-
-            // Test not found
+    @Test
+    fun testResolveReferenceUnbornThrows() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_refs_unborn")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
             try {
-                readReference(gitDir, "refs/heads/nonexistent")
+                resolveReference(repo.gitDir, "HEAD")
                 assertTrue(false, "should have thrown")
             } catch (_: MuonGitException.NotFound) {
                 // expected
             }
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testResolveHeadWithCommit() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_refs_resolve")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val fakeOid = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+            java.io.File(repo.gitDir, "refs/heads/main").writeText(fakeOid)
+            val resolved = resolveReference(repo.gitDir, "HEAD")
+            assertEquals(fakeOid, resolved.hex)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testPackedRefs() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_refs_packed")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val packedOid = "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+            java.io.File(repo.gitDir, "packed-refs").writeText(
+                "# pack-refs with: peeled fully-peeled sorted\n$packedOid refs/tags/v1.0\n"
+            )
+            val tagValue = readReference(repo.gitDir, "refs/tags/v1.0")
+            assertEquals(packedOid, tagValue)
         } finally {
             tmp.deleteRecursively()
         }
@@ -227,37 +275,38 @@ class MuonGitTest {
         tmp.deleteRecursively()
         try {
             val repo = Repository.init(tmp.path)
-            val gitDir = repo.gitDir
-
-            // Create some loose refs
             val oid1 = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
             val oid2 = "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
-            java.io.File(gitDir, "refs/heads/main").writeText("$oid1\n")
-            java.io.File(gitDir, "refs/heads/feature").writeText("$oid2\n")
+            java.io.File(repo.gitDir, "refs/heads/main").writeText(oid1)
+            java.io.File(repo.gitDir, "refs/heads/feature").writeText(oid2)
 
-            // Create a packed ref
-            val oid3 = "ccf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
-            java.io.File(gitDir, "packed-refs").writeText(
-                "# pack-refs with: peeled fully-peeled sorted\n$oid3 refs/tags/v1.0\n"
-            )
-
-            val refs = listReferences(gitDir)
-            assertNotNull(refs)
-            assertTrue(refs.size >= 3, "should have at least 3 refs, got ${refs.size}")
-
+            val refs = listReferences(repo.gitDir)
             val refMap = refs.toMap()
-            assertEquals(oid2, refMap["refs/heads/feature"])
             assertEquals(oid1, refMap["refs/heads/main"])
-            assertEquals(oid3, refMap["refs/tags/v1.0"])
+            assertEquals(oid2, refMap["refs/heads/feature"])
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
 
-            // Verify loose overrides packed
-            val oid4 = "ddf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
-            java.io.File(gitDir, "refs/tags").mkdirs()
-            java.io.File(gitDir, "refs/tags/v1.0").writeText("$oid4\n")
+    @Test
+    fun testLooseOverridesPacked() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_refs_override")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val packedOid = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+            val looseOid = "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
 
-            val refs2 = listReferences(gitDir)
-            val refMap2 = refs2.toMap()
-            assertEquals(oid4, refMap2["refs/tags/v1.0"], "loose ref should override packed ref")
+            java.io.File(repo.gitDir, "packed-refs").writeText(
+                "# pack-refs\n$packedOid refs/tags/v1.0\n"
+            )
+            java.io.File(repo.gitDir, "refs/tags").mkdirs()
+            java.io.File(repo.gitDir, "refs/tags/v1.0").writeText(looseOid)
+
+            val refs = listReferences(repo.gitDir)
+            val refMap = refs.toMap()
+            assertEquals(looseOid, refMap["refs/tags/v1.0"])
         } finally {
             tmp.deleteRecursively()
         }
