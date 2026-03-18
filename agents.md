@@ -96,6 +96,28 @@ $MT done T-000042
 $MT fail-task T-000042 --error "SHA-256 not yet available in stdlib"
 ```
 
+## Temp Directory
+
+All temporary files, test repositories, and scratch work **must** use the project-local `tmp/` directory (gitignored). This keeps everything inside the project sandbox.
+
+```bash
+# Use for test repos in code
+TMP_DIR="$(git rev-parse --show-toplevel)/tmp"
+
+# Rust tests
+let tmp = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tmp/test_name");
+
+# Swift tests
+let tmp = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent()
+    .appendingPathComponent("tmp/test_name").path
+
+# Kotlin tests
+val tmp = java.io.File(System.getProperty("user.dir")).resolve("../tmp/test_name")
+```
+
+**Never** use `/tmp`, `NSTemporaryDirectory()`, or `System.getProperty("java.io.tmpdir")` — those are outside the project sandbox and require extra permissions.
+
 ## Parity Rules
 
 1. **API surface**: Every public function in libgit2's `include/git2/*.h` must have a corresponding function in each port
@@ -110,3 +132,4 @@ $MT fail-task T-000042 --error "SHA-256 not yet available in stdlib"
 - libgit2 tests: `vendor/libgit2/tests/`
 - Tickets: `tickets/`
 - mt.py: `tickets/mt/muontickets/muontickets/mt.py`
+- Temp/scratch: `tmp/` (gitignored, use for all test repos and scratch work)

@@ -75,5 +75,8 @@ kotlin/gradlew.bat
 swift/.build/
 swift/.swiftpm/
 
+# Project temp directory (used by agents for test repos, scratch work)
+tmp/
+
 # MuonTickets
 tickets/mt/muontickets/.muontickets.db
