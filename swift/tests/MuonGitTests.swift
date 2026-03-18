@@ -355,4 +355,83 @@ final class MuonGitTests: XCTestCase {
         XCTAssertEqual(commit.author.name, "Test")
         XCTAssertEqual(commit.message, "test\n")
     }
+
+    // MARK: - Tree Tests
+
+    func testSerializeAndParseTree() throws {
+        let blobOid = OID(hex: "ce013625030ba8dba906f756967f9e9ca394464a")
+        let entries = [TreeEntry(mode: FileMode.blob.rawValue, name: "hello.txt", oid: blobOid)]
+
+        let data = serializeTree(entries: entries)
+        let treeOid = OID.hash(type: .tree, data: Array(data))
+        let tree = try parseTree(oid: treeOid, data: data)
+
+        XCTAssertEqual(tree.entries.count, 1)
+        XCTAssertEqual(tree.entries[0].name, "hello.txt")
+        XCTAssertEqual(tree.entries[0].mode, FileMode.blob.rawValue)
+        XCTAssertEqual(tree.entries[0].oid, blobOid)
+    }
+
+    func testTreeMultipleEntriesSorted() throws {
+        let oid1 = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let oid2 = OID(hex: "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let oid3 = OID(hex: "ccf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+        let entries = [
+            TreeEntry(mode: FileMode.blob.rawValue, name: "z.txt", oid: oid1),
+            TreeEntry(mode: FileMode.blob.rawValue, name: "a.txt", oid: oid2),
+            TreeEntry(mode: FileMode.tree.rawValue, name: "lib", oid: oid3),
+        ]
+
+        let data = serializeTree(entries: entries)
+        let treeOid = OID.hash(type: .tree, data: Array(data))
+        let tree = try parseTree(oid: treeOid, data: data)
+
+        XCTAssertEqual(tree.entries.count, 3)
+        XCTAssertEqual(tree.entries[0].name, "a.txt")
+        XCTAssertEqual(tree.entries[1].name, "lib")
+        XCTAssertTrue(tree.entries[1].isTree)
+        XCTAssertEqual(tree.entries[2].name, "z.txt")
+    }
+
+    func testTreeEntryTypes() {
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+        let blob = TreeEntry(mode: FileMode.blob.rawValue, name: "f", oid: oid)
+        XCTAssertTrue(blob.isBlob)
+        XCTAssertFalse(blob.isTree)
+
+        let exe = TreeEntry(mode: FileMode.blobExe.rawValue, name: "f", oid: oid)
+        XCTAssertTrue(exe.isBlob)
+
+        let tree = TreeEntry(mode: FileMode.tree.rawValue, name: "d", oid: oid)
+        XCTAssertTrue(tree.isTree)
+        XCTAssertFalse(tree.isBlob)
+    }
+
+    func testParseEmptyTree() throws {
+        let oid = OID.hash(type: .tree, data: [])
+        let tree = try parseTree(oid: oid, data: Data())
+        XCTAssertTrue(tree.entries.isEmpty)
+    }
+
+    func testTreeODBRoundTrip() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_tree_odb"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let blobOid = OID(hex: "ce013625030ba8dba906f756967f9e9ca394464a")
+        let entries = [TreeEntry(mode: FileMode.blob.rawValue, name: "file.txt", oid: blobOid)]
+
+        let treeData = serializeTree(entries: entries)
+        let oid = try writeLooseObject(gitDir: repo.gitDir, type: .tree, data: treeData)
+
+        let (readType, readData) = try readLooseObject(gitDir: repo.gitDir, oid: oid)
+        XCTAssertEqual(readType, .tree)
+
+        let tree = try parseTree(oid: oid, data: readData)
+        XCTAssertEqual(tree.entries.count, 1)
+        XCTAssertEqual(tree.entries[0].name, "file.txt")
+    }
 }

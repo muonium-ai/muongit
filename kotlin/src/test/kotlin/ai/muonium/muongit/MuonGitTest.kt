@@ -409,4 +409,90 @@ class MuonGitTest {
             tmp.deleteRecursively()
         }
     }
+
+    // Tree Tests
+
+    @Test
+    fun testSerializeAndParseTree() {
+        val blobOid = OID("ce013625030ba8dba906f756967f9e9ca394464a")
+        val entries = listOf(TreeEntry(mode = FileMode.BLOB, name = "hello.txt", oid = blobOid))
+
+        val data = serializeTree(entries)
+        val treeOid = OID.hashObject(ObjectType.TREE, data)
+        val tree = parseTree(treeOid, data)
+
+        assertEquals(1, tree.entries.size)
+        assertEquals("hello.txt", tree.entries[0].name)
+        assertEquals(FileMode.BLOB, tree.entries[0].mode)
+        assertEquals(blobOid, tree.entries[0].oid)
+    }
+
+    @Test
+    fun testTreeMultipleEntriesSorted() {
+        val oid1 = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val oid2 = OID("bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val oid3 = OID("ccf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+        val entries = listOf(
+            TreeEntry(mode = FileMode.BLOB, name = "z.txt", oid = oid1),
+            TreeEntry(mode = FileMode.BLOB, name = "a.txt", oid = oid2),
+            TreeEntry(mode = FileMode.TREE, name = "lib", oid = oid3),
+        )
+
+        val data = serializeTree(entries)
+        val treeOid = OID.hashObject(ObjectType.TREE, data)
+        val tree = parseTree(treeOid, data)
+
+        assertEquals(3, tree.entries.size)
+        assertEquals("a.txt", tree.entries[0].name)
+        assertEquals("lib", tree.entries[1].name)
+        assertTrue(tree.entries[1].isTree)
+        assertEquals("z.txt", tree.entries[2].name)
+    }
+
+    @Test
+    fun testTreeEntryTypes() {
+        val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+        val blob = TreeEntry(mode = FileMode.BLOB, name = "f", oid = oid)
+        assertTrue(blob.isBlob)
+        assertTrue(!blob.isTree)
+
+        val exe = TreeEntry(mode = FileMode.BLOB_EXE, name = "f", oid = oid)
+        assertTrue(exe.isBlob)
+
+        val tree = TreeEntry(mode = FileMode.TREE, name = "d", oid = oid)
+        assertTrue(tree.isTree)
+        assertTrue(!tree.isBlob)
+    }
+
+    @Test
+    fun testParseEmptyTree() {
+        val oid = OID.hashObject(ObjectType.TREE, byteArrayOf())
+        val tree = parseTree(oid, byteArrayOf())
+        assertTrue(tree.entries.isEmpty())
+    }
+
+    @Test
+    fun testTreeODBRoundTrip() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_tree_odb")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val blobOid = OID("ce013625030ba8dba906f756967f9e9ca394464a")
+            val entries = listOf(TreeEntry(mode = FileMode.BLOB, name = "file.txt", oid = blobOid))
+
+            val treeData = serializeTree(entries)
+            val oid = writeLooseObject(repo.gitDir, ObjectType.TREE, treeData)
+
+            val (readType, readData) = readLooseObject(repo.gitDir, oid)
+            assertEquals(ObjectType.TREE, readType)
+
+            val tree = parseTree(oid, readData)
+            assertEquals(1, tree.entries.size)
+            assertEquals("file.txt", tree.entries[0].name)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
 }
