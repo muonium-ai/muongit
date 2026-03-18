@@ -67,9 +67,6 @@ rust/target/
 # Kotlin
 kotlin/build/
 kotlin/.gradle/
-kotlin/gradle/
-kotlin/gradlew
-kotlin/gradlew.bat
 
 # Swift
 swift/.build/

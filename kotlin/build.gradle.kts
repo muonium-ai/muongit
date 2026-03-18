@@ -1,5 +1,5 @@
 plugins {
-    kotlin("multiplatform") version "2.0.0"
+    kotlin("jvm") version "2.1.10"
 }
 
 group = "ai.muonium"
@@ -10,21 +10,22 @@ repositories {
 }
 
 kotlin {
-    jvm()
-    macosArm64()
-    macosX64()
-    linuxX64()
+    jvmToolchain(21)
+}
 
-    sourceSets {
-        commonMain {
-            dependencies {}
-            kotlin.srcDir("src/main/kotlin")
-        }
-        commonTest {
-            dependencies {
-                implementation(kotlin("test"))
-            }
-            kotlin.srcDir("src/test/kotlin")
-        }
+sourceSets {
+    main {
+        kotlin.srcDir("src/main/kotlin")
     }
+    test {
+        kotlin.srcDir("src/test/kotlin")
+    }
+}
+
+dependencies {
+    testImplementation(kotlin("test"))
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
