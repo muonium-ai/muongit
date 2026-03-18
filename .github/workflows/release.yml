@@ -69,9 +69,9 @@ jobs:
       - name: Package artifact
         run: |
           mkdir -p ../artifacts
-          tar czf ../artifacts/muongit-swift-darwin.tar.gz \
-            -C .build/release \
-            $(ls .build/release/libMuonGit.* .build/release/MuonGit.* 2>/dev/null | xargs -I{} basename {})
+          find .build/release -maxdepth 1 -name 'libMuonGit.*' -exec cp {} ../artifacts/ \;
+          tar czf ../artifacts/muongit-swift-darwin.tar.gz -C ../artifacts .
+          find ../artifacts -not -name '*.tar.gz' -not -path ../artifacts -delete
       - uses: actions/upload-artifact@v4
         with:
           name: muongit-swift-darwin
