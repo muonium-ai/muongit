@@ -31,7 +31,7 @@ class MuonGitTest {
 
     @Test
     fun testVersion() {
-        assertEquals("0.1.0", MuonGitVersion.STRING)
+        assertEquals("0.9.0", MuonGitVersion.STRING)
         assertEquals("1.9.0", MuonGitVersion.LIBGIT2_PARITY)
     }
 

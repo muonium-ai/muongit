@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn test_version() {
-        assert_eq!(crate::version::STRING, "0.1.0");
+        assert_eq!(crate::version::STRING, "0.9.0");
         assert_eq!(crate::version::LIBGIT2_PARITY, "1.9.0");
     }
 

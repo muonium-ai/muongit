@@ -21,7 +21,7 @@ final class MuonGitTests: XCTestCase {
     }
 
     func testVersion() {
-        XCTAssertEqual(MuonGitVersion.string, "0.1.0")
+        XCTAssertEqual(MuonGitVersion.string, "0.9.0")
         XCTAssertEqual(MuonGitVersion.libgit2Parity, "1.9.0")
     }
 
