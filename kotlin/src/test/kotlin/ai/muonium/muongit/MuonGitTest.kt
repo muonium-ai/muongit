@@ -1330,4 +1330,100 @@ class MuonGitTest {
             parsePackIndex(data)
         }
     }
+
+    // Pack Object Tests
+
+    @Test
+    fun testApplyDeltaCopy() {
+        val base = "hello world".toByteArray()
+        val delta = byteArrayOf(11, 11, (0x80 or 0x01 or 0x10).toByte(), 0, 11)
+        val result = applyDelta(base, delta)
+        assertTrue(result.contentEquals(base))
+    }
+
+    @Test
+    fun testApplyDeltaInsert() {
+        val base = "hello".toByteArray()
+        val delta = byteArrayOf(5, 6, 6) + "world!".toByteArray()
+        val result = applyDelta(base, delta)
+        assertTrue(result.contentEquals("world!".toByteArray()))
+    }
+
+    @Test
+    fun testApplyDeltaMixed() {
+        val base = "hello cruel".toByteArray()
+        val delta = byteArrayOf(11, 11, (0x80 or 0x01 or 0x10).toByte(), 0, 5, 6) + " world".toByteArray()
+        val result = applyDelta(base, delta)
+        assertTrue(result.contentEquals("hello world".toByteArray()))
+    }
+
+    @Test
+    fun testBuildAndReadPack() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_pack_read")
+        tmp.deleteRecursively()
+        tmp.mkdirs()
+        try {
+            val blobData = "hello pack\n".toByteArray()
+            val packData = buildTestPack(listOf(Pair(ObjectType.BLOB, blobData)))
+            val packFile = java.io.File(tmp, "test.pack")
+            packFile.writeBytes(packData)
+
+            val oid = OID.hashObject(ObjectType.BLOB, blobData)
+            val idxData = buildPackIndex(listOf(oid), intArrayOf(0), longArrayOf(12))
+            val idx = parsePackIndex(idxData)
+
+            val obj = readPackObject(packFile.path, 12, idx)
+            assertEquals(ObjectType.BLOB, obj.objType)
+            assertTrue(obj.data.contentEquals(blobData))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testBuildAndReadMultipleObjects() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_pack_multi")
+        tmp.deleteRecursively()
+        tmp.mkdirs()
+        try {
+            val blob1 = "first blob\n".toByteArray()
+            val blob2 = "second blob\n".toByteArray()
+            val packData = buildTestPack(listOf(Pair(ObjectType.BLOB, blob1), Pair(ObjectType.BLOB, blob2)))
+            val packFile = java.io.File(tmp, "test.pack")
+            packFile.writeBytes(packData)
+
+            val oid1 = OID.hashObject(ObjectType.BLOB, blob1)
+            val idxData = buildPackIndex(listOf(oid1), intArrayOf(0), longArrayOf(12))
+            val idx = parsePackIndex(idxData)
+
+            val obj1 = readPackObject(packFile.path, 12, idx)
+            assertEquals(ObjectType.BLOB, obj1.objType)
+            assertTrue(obj1.data.contentEquals(blob1))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testReadPackCommit() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_pack_commit")
+        tmp.deleteRecursively()
+        tmp.mkdirs()
+        try {
+            val commitData = "tree 0000000000000000000000000000000000000000\nauthor Test <t@t> 0 +0000\ncommitter Test <t@t> 0 +0000\n\ntest\n".toByteArray()
+            val packData = buildTestPack(listOf(Pair(ObjectType.COMMIT, commitData)))
+            val packFile = java.io.File(tmp, "test.pack")
+            packFile.writeBytes(packData)
+
+            val oid = OID.hashObject(ObjectType.COMMIT, commitData)
+            val idxData = buildPackIndex(listOf(oid), intArrayOf(0), longArrayOf(12))
+            val idx = parsePackIndex(idxData)
+
+            val obj = readPackObject(packFile.path, 12, idx)
+            assertEquals(ObjectType.COMMIT, obj.objType)
+            assertTrue(obj.data.contentEquals(commitData))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
 }

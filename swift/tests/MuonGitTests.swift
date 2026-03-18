@@ -1182,4 +1182,92 @@ final class MuonGitTests: XCTestCase {
         data[0] = 0x00
         XCTAssertThrowsError(try parsePackIndex(data))
     }
+
+    // MARK: - Pack Object Tests
+
+    func testApplyDeltaCopy() throws {
+        let base = Array("hello world".utf8)
+        let cmd: UInt8 = 0x80 | 0x01 | 0x10
+        let delta: [UInt8] = [11, 11, cmd, 0, 11]
+        let result = try applyDelta(base: base, delta: delta)
+        XCTAssertEqual(result, base)
+    }
+
+    func testApplyDeltaInsert() throws {
+        let base = Array("hello".utf8)
+        let delta: [UInt8] = [5, 6, 6] + Array("world!".utf8)
+        let result = try applyDelta(base: base, delta: delta)
+        XCTAssertEqual(result, Array("world!".utf8))
+    }
+
+    func testApplyDeltaMixed() throws {
+        let base = Array("hello cruel".utf8)
+        let cmd2: UInt8 = 0x80 | 0x01 | 0x10
+        let delta: [UInt8] = [11, 11, cmd2, 0, 5, 6] + Array(" world".utf8)
+        let result = try applyDelta(base: base, delta: delta)
+        XCTAssertEqual(result, Array("hello world".utf8))
+    }
+
+    func testBuildAndReadPack() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_pack_read"
+        try? FileManager.default.removeItem(atPath: tmp)
+        try FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let blobData = Array("hello pack\n".utf8)
+        let packData = buildTestPack(objects: [(.blob, blobData)])
+        let packPath = (tmp as NSString).appendingPathComponent("test.pack")
+        try Data(packData).write(to: URL(fileURLWithPath: packPath))
+
+        let oid = OID.hash(type: .blob, data: blobData)
+        let idxData = buildPackIndex(oids: [oid], crcs: [0], offsets: [12])
+        let idx = try parsePackIndex(idxData)
+
+        let obj = try readPackObject(packPath: packPath, offset: 12, index: idx)
+        XCTAssertEqual(obj.objType, .blob)
+        XCTAssertEqual(Array(obj.data), blobData)
+    }
+
+    func testBuildAndReadMultipleObjects() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_pack_multi"
+        try? FileManager.default.removeItem(atPath: tmp)
+        try FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let blob1 = Array("first blob\n".utf8)
+        let blob2 = Array("second blob\n".utf8)
+        let packData = buildTestPack(objects: [(.blob, blob1), (.blob, blob2)])
+        let packPath = (tmp as NSString).appendingPathComponent("test.pack")
+        try Data(packData).write(to: URL(fileURLWithPath: packPath))
+
+        let oid1 = OID.hash(type: .blob, data: blob1)
+        var oids = [oid1]
+        oids.sort { compareOidBytes($0.raw, $1.raw) }
+        let idxData = buildPackIndex(oids: oids, crcs: [0], offsets: [12])
+        let idx = try parsePackIndex(idxData)
+
+        let obj1 = try readPackObject(packPath: packPath, offset: 12, index: idx)
+        XCTAssertEqual(obj1.objType, .blob)
+        XCTAssertEqual(Array(obj1.data), blob1)
+    }
+
+    func testReadPackCommit() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_pack_commit"
+        try? FileManager.default.removeItem(atPath: tmp)
+        try FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let commitData = Array("tree 0000000000000000000000000000000000000000\nauthor Test <t@t> 0 +0000\ncommitter Test <t@t> 0 +0000\n\ntest\n".utf8)
+        let packData = buildTestPack(objects: [(.commit, commitData)])
+        let packPath = (tmp as NSString).appendingPathComponent("test.pack")
+        try Data(packData).write(to: URL(fileURLWithPath: packPath))
+
+        let oid = OID.hash(type: .commit, data: commitData)
+        let idxData = buildPackIndex(oids: [oid], crcs: [0], offsets: [12])
+        let idx = try parsePackIndex(idxData)
+
+        let obj = try readPackObject(packPath: packPath, offset: 12, index: idx)
+        XCTAssertEqual(obj.objType, .commit)
+        XCTAssertEqual(Array(obj.data), commitData)
+    }
 }

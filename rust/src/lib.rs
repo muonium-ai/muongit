@@ -18,6 +18,7 @@ pub mod index;
 pub mod diff;
 pub mod status;
 pub mod pack_index;
+pub mod pack;
 
 pub use oid::OID;
 pub use types::{ObjectType, Signature};
