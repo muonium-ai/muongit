@@ -1426,4 +1426,148 @@ class MuonGitTest {
             tmp.deleteRecursively()
         }
     }
+
+    // Conformance Tests
+
+    @Test
+    fun testConformanceSHA1Vectors() {
+        // Vector 1: empty string
+        val d1 = SHA1.hash(byteArrayOf())
+        assertEquals("da39a3ee5e6b4b0d3255bfef95601890afd80709", d1.joinToString("") { "%02x".format(it) })
+
+        // Vector 2: "hello"
+        val d2 = SHA1.hash("hello")
+        assertEquals("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d", d2.joinToString("") { "%02x".format(it) })
+
+        // Vector 3: longer string
+        val d3 = SHA1.hash("The quick brown fox jumps over the lazy dog")
+        assertEquals("2fd4e1c67a2d28fced849ee1bb76e7391b93eb12", d3.joinToString("") { "%02x".format(it) })
+
+        // Vector 4: with newline
+        val d4 = SHA1.hash("hello world\n")
+        assertEquals("22596363b3de40b06f981fb85d82312e8c0ed511", d4.joinToString("") { "%02x".format(it) })
+    }
+
+    @Test
+    fun testConformanceBlobOID() {
+        val oid1 = OID.hashObject(ObjectType.BLOB, "hello\n".toByteArray())
+        assertEquals("ce013625030ba8dba906f756967f9e9ca394464a", oid1.hex)
+
+        val oid2 = OID.hashObject(ObjectType.BLOB, byteArrayOf())
+        assertEquals("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391", oid2.hex)
+
+        val oid3 = OID.hashObject(ObjectType.BLOB, "test content\n".toByteArray())
+        assertEquals("d670460b4b4aece5915caf5c68d12f560a9fe3e4", oid3.hex)
+    }
+
+    @Test
+    fun testConformanceCommitOID() {
+        val treeId = OID("4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        val author = Signature(name = "Conf Author", email = "author@conf.test", time = 1700000000L, offset = 0)
+        val committer = Signature(name = "Conf Committer", email = "committer@conf.test", time = 1700000000L, offset = 0)
+
+        val data = serializeCommit(treeId, emptyList(), author, committer, "conformance test commit\n")
+        val oid = OID.hashObject(ObjectType.COMMIT, data)
+
+        val parsed = parseCommit(oid, data)
+        assertEquals(treeId, parsed.treeId)
+        assertEquals("Conf Author", parsed.author.name)
+        assertEquals("committer@conf.test", parsed.committer.email)
+        assertEquals("conformance test commit\n", parsed.message)
+
+        assertTrue(!oid.isZero)
+        assertEquals(40, oid.hex.length)
+    }
+
+    @Test
+    fun testConformanceTreeOID() {
+        val blobOid = OID("ce013625030ba8dba906f756967f9e9ca394464a")
+        val entries = listOf(TreeEntry(mode = FileMode.BLOB, name = "hello.txt", oid = blobOid))
+        val data = serializeTree(entries)
+        val oid = OID.hashObject(ObjectType.TREE, data)
+
+        val parsed = parseTree(oid, data)
+        assertEquals(1, parsed.entries.size)
+        assertEquals("hello.txt", parsed.entries[0].name)
+        assertEquals(blobOid, parsed.entries[0].oid)
+
+        assertTrue(!oid.isZero)
+        assertEquals(40, oid.hex.length)
+    }
+
+    @Test
+    fun testConformanceTagOID() {
+        val targetId = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val tagger = Signature(name = "Conf Tagger", email = "tagger@conf.test", time = 1700000000L, offset = 0)
+
+        val data = serializeTag(targetId, ObjectType.COMMIT, "v1.0-conf", tagger, "conformance tag\n")
+        val oid = OID.hashObject(ObjectType.TAG, data)
+
+        val parsed = parseTag(oid, data)
+        assertEquals(targetId, parsed.targetId)
+        assertEquals("v1.0-conf", parsed.tagName)
+        assertEquals("Conf Tagger", parsed.tagger?.name)
+
+        assertTrue(!oid.isZero)
+    }
+
+    @Test
+    fun testConformanceSignatureFormat() {
+        // Positive offset
+        val sig1 = Signature(name = "Test User", email = "test@example.com", time = 1234567890L, offset = 330)
+        assertEquals("Test User <test@example.com> 1234567890 +0530", formatSignatureLine(sig1))
+
+        // Negative offset
+        val sig2 = Signature(name = "Test", email = "test@test.com", time = 1000L, offset = -480)
+        assertEquals("Test <test@test.com> 1000 -0800", formatSignatureLine(sig2))
+
+        // Zero offset
+        val sig3 = Signature(name = "Zero", email = "zero@test.com", time = 0L, offset = 0)
+        assertEquals("Zero <zero@test.com> 0 +0000", formatSignatureLine(sig3))
+    }
+
+    @Test
+    fun testConformanceDeltaApply() {
+        // Copy entire base
+        val base1 = "hello world".toByteArray()
+        val delta1 = byteArrayOf(11, 11, (0x80 or 0x01 or 0x10).toByte(), 0, 11)
+        val result1 = applyDelta(base1, delta1)
+        assertEquals("hello world", String(result1))
+
+        // Insert only
+        val base2 = "hello".toByteArray()
+        val delta2 = byteArrayOf(5, 6, 6) + "world!".toByteArray()
+        val result2 = applyDelta(base2, delta2)
+        assertEquals("world!", String(result2))
+
+        // Copy + insert
+        val base3 = "hello cruel".toByteArray()
+        val delta3 = byteArrayOf(11, 11, (0x80 or 0x01 or 0x10).toByte(), 0, 5, 6) + " world".toByteArray()
+        val result3 = applyDelta(base3, delta3)
+        assertEquals("hello world", String(result3))
+    }
+
+    @Test
+    fun testConformanceIndexRoundTrip() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_conf_index")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val oid = OID("ce013625030ba8dba906f756967f9e9ca394464a")
+
+            val index = Index()
+            index.add(IndexEntry(mode = 33188, fileSize = 6, oid = oid, path = "hello.txt"))
+            index.add(IndexEntry(mode = 33261, fileSize = 100, oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"), path = "script.sh"))
+            writeIndex(repo.gitDir, index)
+
+            val loaded = readIndex(repo.gitDir)
+            assertEquals(2, loaded.entries.size)
+            assertEquals("hello.txt", loaded.entries[0].path)
+            assertEquals("script.sh", loaded.entries[1].path)
+            assertEquals(33188, loaded.entries[0].mode) // 0o100644
+            assertEquals(33261, loaded.entries[1].mode) // 0o100755
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
 }

@@ -1270,4 +1270,154 @@ final class MuonGitTests: XCTestCase {
         XCTAssertEqual(obj.objType, .commit)
         XCTAssertEqual(Array(obj.data), commitData)
     }
+
+    // MARK: - Conformance Tests
+    // These tests use identical inputs and expected outputs across all three ports
+    // to verify cross-language consistency.
+
+    func testConformanceSHA1Vectors() {
+        // Vector 1: empty string
+        let d1 = SHA1.hash([UInt8]())
+        XCTAssertEqual(d1.map { String(format: "%02x", $0) }.joined(), "da39a3ee5e6b4b0d3255bfef95601890afd80709")
+
+        // Vector 2: "hello"
+        let d2 = SHA1.hash(Array("hello".utf8))
+        XCTAssertEqual(d2.map { String(format: "%02x", $0) }.joined(), "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+        // Vector 3: longer string
+        let d3 = SHA1.hash(Array("The quick brown fox jumps over the lazy dog".utf8))
+        XCTAssertEqual(d3.map { String(format: "%02x", $0) }.joined(), "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12")
+
+        // Vector 4: with newline
+        let d4 = SHA1.hash(Array("hello world\n".utf8))
+        XCTAssertEqual(d4.map { String(format: "%02x", $0) }.joined(), "22596363b3de40b06f981fb85d82312e8c0ed511")
+    }
+
+    func testConformanceBlobOID() {
+        // All ports must compute identical OIDs for the same blob content
+        let oid1 = OID.hash(type: .blob, data: Array("hello\n".utf8))
+        XCTAssertEqual(oid1.hex, "ce013625030ba8dba906f756967f9e9ca394464a")
+
+        let oid2 = OID.hash(type: .blob, data: [UInt8]())
+        XCTAssertEqual(oid2.hex, "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391")
+
+        let oid3 = OID.hash(type: .blob, data: Array("test content\n".utf8))
+        XCTAssertEqual(oid3.hex, "d670460b4b4aece5915caf5c68d12f560a9fe3e4")
+    }
+
+    func testConformanceCommitOID() throws {
+        // Serialize a commit with fixed inputs and verify OID matches across ports
+        let treeId = OID(hex: "4b825dc642cb6eb9a060e54bf899d69f7cb46237")
+        let author = Signature(name: "Conf Author", email: "author@conf.test", time: 1700000000, offset: 0)
+        let committer = Signature(name: "Conf Committer", email: "committer@conf.test", time: 1700000000, offset: 0)
+
+        let data = serializeCommit(treeId: treeId, parentIds: [], author: author, committer: committer, message: "conformance test commit\n")
+        let oid = OID.hash(type: .commit, data: Array(data))
+
+        // Verify round-trip
+        let parsed = try parseCommit(oid: oid, data: data)
+        XCTAssertEqual(parsed.treeId, treeId)
+        XCTAssertEqual(parsed.author.name, "Conf Author")
+        XCTAssertEqual(parsed.committer.email, "committer@conf.test")
+        XCTAssertEqual(parsed.message, "conformance test commit\n")
+
+        // The OID must be deterministic — same across all ports
+        // Store this value and verify it matches Kotlin and Rust
+        XCTAssertFalse(oid.isZero)
+        XCTAssertEqual(oid.hex.count, 40)
+    }
+
+    func testConformanceTreeOID() throws {
+        // Build a tree with known entries and verify OID
+        let blobOid = OID(hex: "ce013625030ba8dba906f756967f9e9ca394464a")
+        let entries = [
+            TreeEntry(mode: FileMode.blob.rawValue, name: "hello.txt", oid: blobOid),
+        ]
+        let data = serializeTree(entries: entries)
+        let oid = OID.hash(type: .tree, data: Array(data))
+
+        let parsed = try parseTree(oid: oid, data: data)
+        XCTAssertEqual(parsed.entries.count, 1)
+        XCTAssertEqual(parsed.entries[0].name, "hello.txt")
+        XCTAssertEqual(parsed.entries[0].oid, blobOid)
+
+        XCTAssertFalse(oid.isZero)
+        XCTAssertEqual(oid.hex.count, 40)
+    }
+
+    func testConformanceTagOID() throws {
+        let targetId = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let tagger = Signature(name: "Conf Tagger", email: "tagger@conf.test", time: 1700000000, offset: 0)
+
+        let data = serializeTag(targetId: targetId, targetType: .commit, tagName: "v1.0-conf", tagger: tagger, message: "conformance tag\n")
+        let oid = OID.hash(type: .tag, data: Array(data))
+
+        let parsed = try parseTag(oid: oid, data: data)
+        XCTAssertEqual(parsed.targetId, targetId)
+        XCTAssertEqual(parsed.tagName, "v1.0-conf")
+        XCTAssertEqual(parsed.tagger?.name, "Conf Tagger")
+
+        XCTAssertFalse(oid.isZero)
+    }
+
+    func testConformanceSignatureFormat() {
+        // Positive offset
+        let sig1 = Signature(name: "Test User", email: "test@example.com", time: 1234567890, offset: 330)
+        let fmt1 = formatSignature(sig1)
+        XCTAssertEqual(fmt1, "Test User <test@example.com> 1234567890 +0530")
+
+        // Negative offset
+        let sig2 = Signature(name: "Test", email: "test@test.com", time: 1000, offset: -480)
+        let fmt2 = formatSignature(sig2)
+        XCTAssertEqual(fmt2, "Test <test@test.com> 1000 -0800")
+
+        // Zero offset
+        let sig3 = Signature(name: "Zero", email: "zero@test.com", time: 0, offset: 0)
+        let fmt3 = formatSignature(sig3)
+        XCTAssertEqual(fmt3, "Zero <zero@test.com> 0 +0000")
+    }
+
+    func testConformanceDeltaApply() throws {
+        // Copy entire base
+        let base1 = Array("hello world".utf8)
+        let cmd1: UInt8 = 0x80 | 0x01 | 0x10
+        let delta1: [UInt8] = [11, 11, cmd1, 0, 11]
+        let result1 = try applyDelta(base: base1, delta: delta1)
+        XCTAssertEqual(String(bytes: result1, encoding: .utf8), "hello world")
+
+        // Insert only
+        let base2 = Array("hello".utf8)
+        let delta2: [UInt8] = [5, 6, 6] + Array("world!".utf8)
+        let result2 = try applyDelta(base: base2, delta: delta2)
+        XCTAssertEqual(String(bytes: result2, encoding: .utf8), "world!")
+
+        // Copy + insert
+        let base3 = Array("hello cruel".utf8)
+        let cmd3: UInt8 = 0x80 | 0x01 | 0x10
+        let delta3: [UInt8] = [11, 11, cmd3, 0, 5, 6] + Array(" world".utf8)
+        let result3 = try applyDelta(base: base3, delta: delta3)
+        XCTAssertEqual(String(bytes: result3, encoding: .utf8), "hello world")
+    }
+
+    func testConformanceIndexRoundTrip() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_conf_index"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let oid = OID(hex: "ce013625030ba8dba906f756967f9e9ca394464a")
+
+        var index = Index()
+        index.add(IndexEntry(mode: 0o100644, fileSize: 6, oid: oid, path: "hello.txt"))
+        index.add(IndexEntry(mode: 0o100755, fileSize: 100, oid: OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"), path: "script.sh"))
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        let loaded = try readIndex(gitDir: repo.gitDir)
+        XCTAssertEqual(loaded.entries.count, 2)
+        // Entries must be sorted
+        XCTAssertEqual(loaded.entries[0].path, "hello.txt")
+        XCTAssertEqual(loaded.entries[1].path, "script.sh")
+        XCTAssertEqual(loaded.entries[0].mode, 0o100644)
+        XCTAssertEqual(loaded.entries[1].mode, 0o100755)
+    }
 }

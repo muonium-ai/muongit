@@ -89,7 +89,7 @@ internal fun parseSignatureLine(s: String): Signature {
 }
 
 /** Format a Signature into "Name <email> timestamp offset" */
-internal fun formatSignatureLine(sig: Signature): String {
+fun formatSignatureLine(sig: Signature): String {
     val sign = if (sig.offset >= 0) "+" else "-"
     val abs = kotlin.math.abs(sig.offset)
     val hours = abs / 60

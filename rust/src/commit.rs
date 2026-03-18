@@ -108,7 +108,7 @@ fn parse_signature(s: &str) -> Signature {
 }
 
 /// Format a Signature into "Name <email> timestamp offset"
-fn format_signature(sig: &Signature) -> String {
+pub fn format_signature(sig: &Signature) -> String {
     let sign = if sig.offset >= 0 { "+" } else { "-" };
     let abs = sig.offset.unsigned_abs();
     let hours = abs / 60;
