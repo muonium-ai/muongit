@@ -1608,6 +1608,68 @@ final class MuonGitTests: XCTestCase {
         XCTAssertThrowsError(try getRemote(gitDir: repo.gitDir, name: "nope"))
     }
 
+    // MARK: - Three-Way Merge Tests
+
+    func testMerge3NoChanges() {
+        let base = "line1\nline2\nline3"
+        let result = merge3(base: base, ours: base, theirs: base)
+        XCTAssertFalse(result.hasConflicts)
+        XCTAssertEqual(result.toCleanString(), "line1\nline2\nline3\n")
+    }
+
+    func testMerge3OursOnly() {
+        let result = merge3(base: "line1\nline2\nline3", ours: "line1\nmodified\nline3", theirs: "line1\nline2\nline3")
+        XCTAssertFalse(result.hasConflicts)
+        XCTAssertEqual(result.toCleanString(), "line1\nmodified\nline3\n")
+    }
+
+    func testMerge3TheirsOnly() {
+        let result = merge3(base: "line1\nline2\nline3", ours: "line1\nline2\nline3", theirs: "line1\nline2\nchanged")
+        XCTAssertFalse(result.hasConflicts)
+        XCTAssertEqual(result.toCleanString(), "line1\nline2\nchanged\n")
+    }
+
+    func testMerge3BothDifferentRegions() {
+        let result = merge3(base: "line1\nline2\nline3", ours: "changed1\nline2\nline3", theirs: "line1\nline2\nchanged3")
+        XCTAssertFalse(result.hasConflicts)
+        XCTAssertEqual(result.toCleanString(), "changed1\nline2\nchanged3\n")
+    }
+
+    func testMerge3SameChangeBothSides() {
+        let both = "line1\nSAME\nline3"
+        let result = merge3(base: "line1\nline2\nline3", ours: both, theirs: both)
+        XCTAssertFalse(result.hasConflicts)
+        XCTAssertEqual(result.toCleanString(), "line1\nSAME\nline3\n")
+    }
+
+    func testMerge3Conflict() {
+        let result = merge3(base: "line1\nline2\nline3", ours: "line1\nours\nline3", theirs: "line1\ntheirs\nline3")
+        XCTAssertTrue(result.hasConflicts)
+        XCTAssertNil(result.toCleanString())
+        let text = result.toStringWithMarkers()
+        XCTAssertTrue(text.contains("<<<<<<< ours"))
+        XCTAssertTrue(text.contains("======="))
+        XCTAssertTrue(text.contains(">>>>>>> theirs"))
+    }
+
+    func testMerge3OursAddsLines() {
+        let result = merge3(base: "line1\nline3", ours: "line1\nline2\nline3", theirs: "line1\nline3")
+        XCTAssertFalse(result.hasConflicts)
+        XCTAssertEqual(result.toCleanString(), "line1\nline2\nline3\n")
+    }
+
+    func testMerge3TheirsDeletesLines() {
+        let result = merge3(base: "line1\nline2\nline3", ours: "line1\nline2\nline3", theirs: "line1\nline3")
+        XCTAssertFalse(result.hasConflicts)
+        XCTAssertEqual(result.toCleanString(), "line1\nline3\n")
+    }
+
+    func testMerge3EmptyBase() {
+        let result = merge3(base: "", ours: "added", theirs: "")
+        XCTAssertFalse(result.hasConflicts)
+        XCTAssertEqual(result.toCleanString(), "added\n")
+    }
+
     // MARK: - Pack Index Tests
 
     private func sortedTestOids() -> ([OID], [UInt32], [UInt64]) {
