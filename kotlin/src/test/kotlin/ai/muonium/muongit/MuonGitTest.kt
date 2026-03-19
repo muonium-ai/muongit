@@ -2304,6 +2304,140 @@ class MuonGitTest {
         }
     }
 
+    // Submodule Tests
+
+    @Test
+    fun testParseGitmodules() {
+        val content = "[submodule \"lib/foo\"]\n\tpath = lib/foo\n\turl = https://github.com/example/foo.git\n[submodule \"lib/bar\"]\n\tpath = lib/bar\n\turl = https://github.com/example/bar.git\n\tbranch = develop\n"
+        val subs = parseGitmodules(content)
+        assertEquals(2, subs.size)
+        assertEquals("lib/foo", subs[0].name)
+        assertEquals("lib/foo", subs[0].path)
+        assertEquals("https://github.com/example/foo.git", subs[0].url)
+        assertNull(subs[0].branch)
+        assertEquals("lib/bar", subs[1].name)
+        assertEquals("develop", subs[1].branch)
+    }
+
+    @Test
+    fun testParseGitmodulesWithOptions() {
+        val content = "[submodule \"vendor/lib\"]\n\tpath = vendor/lib\n\turl = git@github.com:example/lib.git\n\tshallow = true\n\tupdate = rebase\n\tfetchRecurseSubmodules = false\n"
+        val subs = parseGitmodules(content)
+        assertEquals(1, subs.size)
+        assertTrue(subs[0].shallow)
+        assertEquals("rebase", subs[0].update)
+        assertEquals(false, subs[0].fetchRecurse)
+    }
+
+    @Test
+    fun testParseEmptyGitmodules() {
+        val subs = parseGitmodules("")
+        assertTrue(subs.isEmpty())
+    }
+
+    @Test
+    fun testLoadSubmodulesNoFile() {
+        val tmp = createTempDir("test_submod_nofile")
+        try {
+            val repo = Repository.init(tmp.absolutePath, false)
+            val subs = loadSubmodules(repo.workdir!!)
+            assertTrue(subs.isEmpty())
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testWriteAndLoadGitmodules() {
+        val tmp = createTempDir("test_submod_write")
+        try {
+            val repo = Repository.init(tmp.absolutePath, false)
+            val subs = listOf(
+                Submodule("libs/core", "libs/core", "https://example.com/core.git", branch = "main"),
+                Submodule("vendor/ext", "vendor/ext", "https://example.com/ext.git", shallow = true, update = "merge", fetchRecurse = true)
+            )
+            writeGitmodules(repo.workdir!!, subs)
+            val loaded = loadSubmodules(repo.workdir!!)
+
+            assertEquals(2, loaded.size)
+            assertEquals("libs/core", loaded[0].name)
+            assertEquals("https://example.com/core.git", loaded[0].url)
+            assertEquals("main", loaded[0].branch)
+            assertEquals("vendor/ext", loaded[1].name)
+            assertTrue(loaded[1].shallow)
+            assertEquals("merge", loaded[1].update)
+            assertEquals(true, loaded[1].fetchRecurse)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testGetSubmodule() {
+        val tmp = createTempDir("test_submod_get")
+        try {
+            val repo = Repository.init(tmp.absolutePath, false)
+            val subs = listOf(Submodule("mylib", "lib/mylib", "https://example.com/mylib.git"))
+            writeGitmodules(repo.workdir!!, subs)
+
+            val sub = getSubmodule(repo.workdir!!, "mylib")
+            assertEquals("lib/mylib", sub.path)
+            assertEquals("https://example.com/mylib.git", sub.url)
+
+            assertFailsWith<MuonGitException.NotFound> { getSubmodule(repo.workdir!!, "nonexistent") }
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testSubmoduleInit() {
+        val tmp = createTempDir("test_submod_init")
+        try {
+            val repo = Repository.init(tmp.absolutePath, false)
+            val subs = listOf(
+                Submodule("foo", "foo", "https://example.com/foo.git"),
+                Submodule("bar", "bar", "https://example.com/bar.git")
+            )
+            writeGitmodules(repo.workdir!!, subs)
+
+            val count = submoduleInit(repo.gitDir, repo.workdir!!)
+            assertEquals(2, count)
+
+            val config = Config.load(java.io.File(repo.gitDir, "config").absolutePath)
+            assertEquals("https://example.com/foo.git", config.get("submodule.foo", "url"))
+            assertEquals("https://example.com/bar.git", config.get("submodule.bar", "url"))
+
+            // Re-init should not re-add
+            val count2 = submoduleInit(repo.gitDir, repo.workdir!!)
+            assertEquals(0, count2)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testSubmoduleInitSelective() {
+        val tmp = createTempDir("test_submod_initsel")
+        try {
+            val repo = Repository.init(tmp.absolutePath, false)
+            val subs = listOf(
+                Submodule("a", "a", "https://example.com/a.git"),
+                Submodule("b", "b", "https://example.com/b.git")
+            )
+            writeGitmodules(repo.workdir!!, subs)
+
+            val count = submoduleInit(repo.gitDir, repo.workdir!!, listOf("a"))
+            assertEquals(1, count)
+
+            val config = Config.load(java.io.File(repo.gitDir, "config").absolutePath)
+            assertEquals("https://example.com/a.git", config.get("submodule.a", "url"))
+            assertNull(config.get("submodule.b", "url"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
     // Pack Index Tests
 
     private fun sortedTestOids(): Triple<List<OID>, IntArray, LongArray> {

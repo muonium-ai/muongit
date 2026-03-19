@@ -60,7 +60,7 @@
 - [x] Clone
 
 ## Phase 7: Advanced
-- [ ] Submodule support
+- [x] Submodule support
 - [ ] Worktree support
 - [ ] Stash
 - [ ] Blame

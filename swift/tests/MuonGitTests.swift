@@ -2044,6 +2044,145 @@ final class MuonGitTests: XCTestCase {
         XCTAssertTrue(head.contains("refs/heads/develop"))
     }
 
+    // MARK: - Submodule Tests
+
+    func testParseGitmodules() throws {
+        let content = """
+        [submodule "lib/foo"]
+        \tpath = lib/foo
+        \turl = https://github.com/example/foo.git
+        [submodule "lib/bar"]
+        \tpath = lib/bar
+        \turl = https://github.com/example/bar.git
+        \tbranch = develop
+        """
+        let subs = parseGitmodules(content: content)
+        XCTAssertEqual(subs.count, 2)
+        XCTAssertEqual(subs[0].name, "lib/foo")
+        XCTAssertEqual(subs[0].path, "lib/foo")
+        XCTAssertEqual(subs[0].url, "https://github.com/example/foo.git")
+        XCTAssertNil(subs[0].branch)
+        XCTAssertEqual(subs[1].name, "lib/bar")
+        XCTAssertEqual(subs[1].branch, "develop")
+    }
+
+    func testParseGitmodulesWithOptions() throws {
+        let content = """
+        [submodule "vendor/lib"]
+        \tpath = vendor/lib
+        \turl = git@github.com:example/lib.git
+        \tshallow = true
+        \tupdate = rebase
+        \tfetchRecurseSubmodules = false
+        """
+        let subs = parseGitmodules(content: content)
+        XCTAssertEqual(subs.count, 1)
+        XCTAssertTrue(subs[0].shallow)
+        XCTAssertEqual(subs[0].update, "rebase")
+        XCTAssertEqual(subs[0].fetchRecurse, false)
+    }
+
+    func testParseEmptyGitmodules() throws {
+        let subs = parseGitmodules(content: "")
+        XCTAssertTrue(subs.isEmpty)
+    }
+
+    func testLoadSubmodulesNoFile() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("test_submod_nofile_\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp, bare: false)
+
+        let subs = loadSubmodules(workdir: repo.workdir!)
+        XCTAssertTrue(subs.isEmpty)
+    }
+
+    func testWriteAndLoadGitmodules() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("test_submod_write_\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp, bare: false)
+
+        let subs = [
+            Submodule(name: "libs/core", path: "libs/core", url: "https://example.com/core.git",
+                      branch: "main", shallow: false, update: nil, fetchRecurse: nil),
+            Submodule(name: "vendor/ext", path: "vendor/ext", url: "https://example.com/ext.git",
+                      branch: nil, shallow: true, update: "merge", fetchRecurse: true),
+        ]
+
+        try writeGitmodules(workdir: repo.workdir!, submodules: subs)
+        let loaded = loadSubmodules(workdir: repo.workdir!)
+
+        XCTAssertEqual(loaded.count, 2)
+        XCTAssertEqual(loaded[0].name, "libs/core")
+        XCTAssertEqual(loaded[0].url, "https://example.com/core.git")
+        XCTAssertEqual(loaded[0].branch, "main")
+        XCTAssertEqual(loaded[1].name, "vendor/ext")
+        XCTAssertTrue(loaded[1].shallow)
+        XCTAssertEqual(loaded[1].update, "merge")
+        XCTAssertEqual(loaded[1].fetchRecurse, true)
+    }
+
+    func testGetSubmodule() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("test_submod_get_\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp, bare: false)
+
+        let subs = [Submodule(name: "mylib", path: "lib/mylib", url: "https://example.com/mylib.git",
+                              branch: nil, shallow: false, update: nil, fetchRecurse: nil)]
+        try writeGitmodules(workdir: repo.workdir!, submodules: subs)
+
+        let sub = try getSubmodule(workdir: repo.workdir!, name: "mylib")
+        XCTAssertEqual(sub.path, "lib/mylib")
+        XCTAssertEqual(sub.url, "https://example.com/mylib.git")
+
+        XCTAssertThrowsError(try getSubmodule(workdir: repo.workdir!, name: "nonexistent"))
+    }
+
+    func testSubmoduleInit() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("test_submod_init_\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp, bare: false)
+
+        let subs = [
+            Submodule(name: "foo", path: "foo", url: "https://example.com/foo.git",
+                      branch: nil, shallow: false, update: nil, fetchRecurse: nil),
+            Submodule(name: "bar", path: "bar", url: "https://example.com/bar.git",
+                      branch: nil, shallow: false, update: nil, fetchRecurse: nil),
+        ]
+        try writeGitmodules(workdir: repo.workdir!, submodules: subs)
+
+        let count = try submoduleInit(gitDir: repo.gitDir, workdir: repo.workdir!)
+        XCTAssertEqual(count, 2)
+
+        let config = try Config.load(from: (repo.gitDir as NSString).appendingPathComponent("config"))
+        XCTAssertEqual(config.get(section: "submodule.foo", key: "url"), "https://example.com/foo.git")
+        XCTAssertEqual(config.get(section: "submodule.bar", key: "url"), "https://example.com/bar.git")
+
+        // Re-init should not re-add
+        let count2 = try submoduleInit(gitDir: repo.gitDir, workdir: repo.workdir!)
+        XCTAssertEqual(count2, 0)
+    }
+
+    func testSubmoduleInitSelective() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("test_submod_initsel_\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp, bare: false)
+
+        let subs = [
+            Submodule(name: "a", path: "a", url: "https://example.com/a.git",
+                      branch: nil, shallow: false, update: nil, fetchRecurse: nil),
+            Submodule(name: "b", path: "b", url: "https://example.com/b.git",
+                      branch: nil, shallow: false, update: nil, fetchRecurse: nil),
+        ]
+        try writeGitmodules(workdir: repo.workdir!, submodules: subs)
+
+        let count = try submoduleInit(gitDir: repo.gitDir, workdir: repo.workdir!, names: ["a"])
+        XCTAssertEqual(count, 1)
+
+        let config = try Config.load(from: (repo.gitDir as NSString).appendingPathComponent("config"))
+        XCTAssertEqual(config.get(section: "submodule.a", key: "url"), "https://example.com/a.git")
+        XCTAssertNil(config.get(section: "submodule.b", key: "url"))
+    }
+
     // MARK: - Pack Index Tests
 
     private func sortedTestOids() -> ([OID], [UInt32], [UInt64]) {
