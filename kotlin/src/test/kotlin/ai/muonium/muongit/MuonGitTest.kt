@@ -6,6 +6,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
 
 class MuonGitTest {
     @Test
@@ -1343,6 +1344,147 @@ class MuonGitTest {
     fun testFormatStatEmpty() {
         val output = formatStat(emptyList())
         assertTrue(output.isEmpty())
+    }
+
+    // Index-to-Workdir Diff Tests
+
+    @Test
+    fun testDiffWorkdirClean() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_diff_workdir_clean")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val content = "hello\n".toByteArray()
+            java.io.File(tmp, "hello.txt").writeBytes(content)
+
+            val oid = OID.hashObject(ObjectType.BLOB, content)
+            val index = Index()
+            index.add(makeStatusIndexEntry("hello.txt", oid, content.size))
+            writeIndex(repo.gitDir, index)
+
+            val deltas = diffIndexToWorkdir(repo.gitDir, tmp)
+            assertTrue(deltas.isEmpty())
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testDiffWorkdirModified() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_diff_workdir_mod")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val content = "hello\n".toByteArray()
+            java.io.File(tmp, "hello.txt").writeBytes(content)
+
+            val oid = OID.hashObject(ObjectType.BLOB, content)
+            val index = Index()
+            index.add(makeStatusIndexEntry("hello.txt", oid, content.size))
+            writeIndex(repo.gitDir, index)
+
+            // Modify the file
+            java.io.File(tmp, "hello.txt").writeText("changed\n")
+
+            val deltas = diffIndexToWorkdir(repo.gitDir, tmp)
+            assertEquals(1, deltas.size)
+            assertEquals(DiffStatus.MODIFIED, deltas[0].status)
+            assertEquals("hello.txt", deltas[0].path)
+            assertNotNull(deltas[0].oldEntry)
+            assertNotNull(deltas[0].newEntry)
+            assertNotEquals(deltas[0].oldEntry!!.oid, deltas[0].newEntry!!.oid)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testDiffWorkdirDeleted() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_diff_workdir_del")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val content = "hello\n".toByteArray()
+            val oid = OID.hashObject(ObjectType.BLOB, content)
+            val index = Index()
+            index.add(makeStatusIndexEntry("hello.txt", oid, content.size))
+            writeIndex(repo.gitDir, index)
+
+            // Don't create the file — it's deleted
+            val deltas = diffIndexToWorkdir(repo.gitDir, tmp)
+            assertEquals(1, deltas.size)
+            assertEquals(DiffStatus.DELETED, deltas[0].status)
+            assertEquals("hello.txt", deltas[0].path)
+            assertNotNull(deltas[0].oldEntry)
+            assertNull(deltas[0].newEntry)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testDiffWorkdirNewFile() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_diff_workdir_new")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val index = Index()
+            writeIndex(repo.gitDir, index)
+
+            // Create a file not in the index
+            java.io.File(tmp, "new.txt").writeText("new\n")
+
+            val deltas = diffIndexToWorkdir(repo.gitDir, tmp)
+            assertEquals(1, deltas.size)
+            assertEquals(DiffStatus.ADDED, deltas[0].status)
+            assertEquals("new.txt", deltas[0].path)
+            assertNull(deltas[0].oldEntry)
+            assertNotNull(deltas[0].newEntry)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testDiffWorkdirMixed() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_diff_workdir_mixed")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val contentA = "aaa\n".toByteArray()
+            val contentB = "bbb\n".toByteArray()
+            val oidA = OID.hashObject(ObjectType.BLOB, contentA)
+            val oidB = OID.hashObject(ObjectType.BLOB, contentB)
+
+            val index = Index()
+            index.add(makeStatusIndexEntry("a.txt", oidA, contentA.size))
+            index.add(makeStatusIndexEntry("b.txt", oidB, contentB.size))
+            index.add(makeStatusIndexEntry("c.txt", oidA, contentA.size))
+            writeIndex(repo.gitDir, index)
+
+            // a.txt: unchanged
+            java.io.File(tmp, "a.txt").writeBytes(contentA)
+            // b.txt: modified
+            java.io.File(tmp, "b.txt").writeText("modified\n")
+            // c.txt: deleted (not created)
+            // d.txt: new
+            java.io.File(tmp, "d.txt").writeText("new\n")
+
+            val deltas = diffIndexToWorkdir(repo.gitDir, tmp)
+
+            val modified = deltas.filter { it.status == DiffStatus.MODIFIED }
+            val deleted = deltas.filter { it.status == DiffStatus.DELETED }
+            val added = deltas.filter { it.status == DiffStatus.ADDED }
+
+            assertEquals(1, modified.size)
+            assertEquals("b.txt", modified[0].path)
+            assertEquals(1, deleted.size)
+            assertEquals("c.txt", deleted[0].path)
+            assertEquals(1, added.size)
+            assertEquals("d.txt", added[0].path)
+        } finally {
+            tmp.deleteRecursively()
+        }
     }
 
     // Pack Index Tests

@@ -1,5 +1,6 @@
 package ai.muonium.muongit
 
+import java.io.File
 import kotlin.math.min
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -62,6 +63,87 @@ fun diffTrees(oldEntries: List<TreeEntry>, newEntries: List<TreeEntry>): List<Di
     }
 
     return deltas
+}
+
+/** Compute the diff between the index (staging area) and the working directory.
+ *  Returns deltas for modified, deleted, and new (untracked) files. */
+fun diffIndexToWorkdir(gitDir: File, workdir: File): List<DiffDelta> {
+    val index = readIndex(gitDir)
+    val deltas = mutableListOf<DiffDelta>()
+
+    val indexedPaths = index.entries.map { it.path }.toSet()
+
+    // Check each index entry against the working directory
+    for (entry in index.entries) {
+        val file = File(workdir, entry.path)
+        if (!file.exists()) {
+            deltas.add(DiffDelta(
+                DiffStatus.DELETED,
+                indexEntryToTreeEntry(entry),
+                null,
+                entry.path
+            ))
+        } else {
+            val fileSize = file.length().toInt()
+            var modified = fileSize != entry.fileSize
+            if (!modified) {
+                val content = file.readBytes()
+                val oid = OID.hashObject(ObjectType.BLOB, content)
+                modified = oid != entry.oid
+            }
+
+            if (modified) {
+                val content = file.readBytes()
+                val workdirOid = OID.hashObject(ObjectType.BLOB, content)
+                val workdirMode = if (file.canExecute()) FileMode.BLOB_EXE else FileMode.BLOB
+                deltas.add(DiffDelta(
+                    DiffStatus.MODIFIED,
+                    indexEntryToTreeEntry(entry),
+                    TreeEntry(workdirMode, entry.path, workdirOid),
+                    entry.path
+                ))
+            }
+        }
+    }
+
+    // Find new (untracked) files
+    val newFiles = mutableListOf<String>()
+    collectDiffFiles(workdir, workdir, gitDir, indexedPaths, newFiles)
+    newFiles.sort()
+
+    for (relPath in newFiles) {
+        val file = File(workdir, relPath)
+        val content = file.readBytes()
+        val oid = OID.hashObject(ObjectType.BLOB, content)
+        val mode = if (file.canExecute()) FileMode.BLOB_EXE else FileMode.BLOB
+        deltas.add(DiffDelta(
+            DiffStatus.ADDED,
+            null,
+            TreeEntry(mode, relPath, oid),
+            relPath
+        ))
+    }
+
+    return deltas
+}
+
+private fun indexEntryToTreeEntry(entry: IndexEntry): TreeEntry =
+    TreeEntry(entry.mode, entry.path, entry.oid)
+
+private fun collectDiffFiles(dir: File, workdir: File, gitDir: File, indexed: Set<String>, result: MutableList<String>) {
+    val items = dir.listFiles() ?: return
+    for (item in items) {
+        if (item.name == ".git") continue
+
+        if (item.isDirectory) {
+            collectDiffFiles(item, workdir, gitDir, indexed, result)
+        } else {
+            val relative = item.relativeTo(workdir).path
+            if (relative !in indexed) {
+                result.add(relative)
+            }
+        }
+    }
 }
 
 // --- Diff formatting (patch and stat) ---

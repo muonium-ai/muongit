@@ -1185,6 +1185,135 @@ final class MuonGitTests: XCTestCase {
         XCTAssert(output.isEmpty)
     }
 
+    // MARK: - Index-to-Workdir Diff Tests
+
+    func testDiffWorkdirClean() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_diff_workdir_clean"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let content = Array("hello\n".utf8)
+        let filePath = (repo.workdir! as NSString).appendingPathComponent("hello.txt")
+        try Data(content).write(to: URL(fileURLWithPath: filePath))
+
+        let oid = OID.hash(type: .blob, data: content)
+        var index = Index()
+        index.add(makeIndexEntry(path: "hello.txt", oid: oid, fileSize: UInt32(content.count)))
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        let deltas = try diffIndexToWorkdir(gitDir: repo.gitDir, workdir: repo.workdir!)
+        XCTAssert(deltas.isEmpty)
+    }
+
+    func testDiffWorkdirModified() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_diff_workdir_mod"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let content = Array("hello\n".utf8)
+        let filePath = (repo.workdir! as NSString).appendingPathComponent("hello.txt")
+        try Data(content).write(to: URL(fileURLWithPath: filePath))
+
+        let oid = OID.hash(type: .blob, data: content)
+        var index = Index()
+        index.add(makeIndexEntry(path: "hello.txt", oid: oid, fileSize: UInt32(content.count)))
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        // Modify the file
+        try Data("changed\n".utf8).write(to: URL(fileURLWithPath: filePath))
+
+        let deltas = try diffIndexToWorkdir(gitDir: repo.gitDir, workdir: repo.workdir!)
+        XCTAssertEqual(deltas.count, 1)
+        XCTAssertEqual(deltas[0].status, .modified)
+        XCTAssertEqual(deltas[0].path, "hello.txt")
+        XCTAssertNotNil(deltas[0].oldEntry)
+        XCTAssertNotNil(deltas[0].newEntry)
+        XCTAssertNotEqual(deltas[0].oldEntry!.oid, deltas[0].newEntry!.oid)
+    }
+
+    func testDiffWorkdirDeleted() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_diff_workdir_del"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let content = Array("hello\n".utf8)
+        let oid = OID.hash(type: .blob, data: content)
+        var index = Index()
+        index.add(makeIndexEntry(path: "hello.txt", oid: oid, fileSize: UInt32(content.count)))
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        // Don't create the file — it's deleted
+        let deltas = try diffIndexToWorkdir(gitDir: repo.gitDir, workdir: repo.workdir!)
+        XCTAssertEqual(deltas.count, 1)
+        XCTAssertEqual(deltas[0].status, .deleted)
+        XCTAssertEqual(deltas[0].path, "hello.txt")
+        XCTAssertNotNil(deltas[0].oldEntry)
+        XCTAssertNil(deltas[0].newEntry)
+    }
+
+    func testDiffWorkdirNewFile() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_diff_workdir_new"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let index = Index()
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        // Create a file not in the index
+        try Data("new\n".utf8).write(to: URL(fileURLWithPath: (repo.workdir! as NSString).appendingPathComponent("new.txt")))
+
+        let deltas = try diffIndexToWorkdir(gitDir: repo.gitDir, workdir: repo.workdir!)
+        XCTAssertEqual(deltas.count, 1)
+        XCTAssertEqual(deltas[0].status, .added)
+        XCTAssertEqual(deltas[0].path, "new.txt")
+        XCTAssertNil(deltas[0].oldEntry)
+        XCTAssertNotNil(deltas[0].newEntry)
+    }
+
+    func testDiffWorkdirMixed() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_diff_workdir_mixed"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let contentA = Array("aaa\n".utf8)
+        let contentB = Array("bbb\n".utf8)
+        let oidA = OID.hash(type: .blob, data: contentA)
+        let oidB = OID.hash(type: .blob, data: contentB)
+
+        var index = Index()
+        index.add(makeIndexEntry(path: "a.txt", oid: oidA, fileSize: UInt32(contentA.count)))
+        index.add(makeIndexEntry(path: "b.txt", oid: oidB, fileSize: UInt32(contentB.count)))
+        index.add(makeIndexEntry(path: "c.txt", oid: oidA, fileSize: UInt32(contentA.count)))
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        let wd = repo.workdir!
+        // a.txt: unchanged
+        try Data(contentA).write(to: URL(fileURLWithPath: (wd as NSString).appendingPathComponent("a.txt")))
+        // b.txt: modified
+        try Data("modified\n".utf8).write(to: URL(fileURLWithPath: (wd as NSString).appendingPathComponent("b.txt")))
+        // c.txt: deleted (not created)
+        // d.txt: new
+        try Data("new\n".utf8).write(to: URL(fileURLWithPath: (wd as NSString).appendingPathComponent("d.txt")))
+
+        let deltas = try diffIndexToWorkdir(gitDir: repo.gitDir, workdir: wd)
+
+        let modified = deltas.filter { $0.status == .modified }
+        let deleted = deltas.filter { $0.status == .deleted }
+        let added = deltas.filter { $0.status == .added }
+
+        XCTAssertEqual(modified.count, 1)
+        XCTAssertEqual(modified[0].path, "b.txt")
+        XCTAssertEqual(deleted.count, 1)
+        XCTAssertEqual(deleted[0].path, "c.txt")
+        XCTAssertEqual(added.count, 1)
+        XCTAssertEqual(added[0].path, "d.txt")
+    }
+
     // MARK: - Pack Index Tests
 
     private func sortedTestOids() -> ([OID], [UInt32], [UInt64]) {
