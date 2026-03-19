@@ -7,6 +7,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
+import kotlin.test.assertFalse
 
 class MuonGitTest {
     @Test
@@ -1482,6 +1483,125 @@ class MuonGitTest {
             assertEquals("c.txt", deleted[0].path)
             assertEquals(1, added.size)
             assertEquals("d.txt", added[0].path)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    // Ignore / Glob Tests
+
+    @Test
+    fun testGlobMatchBasic() {
+        assertTrue(globMatch("*.txt", "hello.txt"))
+        assertFalse(globMatch("*.txt", "hello.rs"))
+        assertTrue(globMatch("hello.*", "hello.txt"))
+        assertTrue(globMatch("?ello.txt", "hello.txt"))
+        assertFalse(globMatch("?ello.txt", "hhello.txt"))
+    }
+
+    @Test
+    fun testGlobMatchStarNoSlash() {
+        assertFalse(globMatch("*.txt", "dir/hello.txt"))
+        assertTrue(globMatch("*.txt", "hello.txt"))
+    }
+
+    @Test
+    fun testGlobMatchDoubleStar() {
+        assertTrue(globMatch("**/*.txt", "hello.txt"))
+        assertTrue(globMatch("**/*.txt", "dir/hello.txt"))
+        assertTrue(globMatch("**/*.txt", "a/b/c/hello.txt"))
+        assertTrue(globMatch("**/build", "build"))
+        assertTrue(globMatch("**/build", "src/build"))
+    }
+
+    @Test
+    fun testGlobMatchCharClass() {
+        assertTrue(globMatch("[abc].txt", "a.txt"))
+        assertTrue(globMatch("[abc].txt", "b.txt"))
+        assertFalse(globMatch("[abc].txt", "d.txt"))
+        assertTrue(globMatch("[a-z].txt", "m.txt"))
+        assertFalse(globMatch("[a-z].txt", "M.txt"))
+        assertTrue(globMatch("[!abc].txt", "d.txt"))
+        assertFalse(globMatch("[!abc].txt", "a.txt"))
+    }
+
+    @Test
+    fun testIgnoreBasic() {
+        val ignore = Ignore()
+        ignore.addPatterns("*.o\n*.log\nbuild/\n", "")
+
+        assertTrue(ignore.isIgnored("main.o", false))
+        assertTrue(ignore.isIgnored("debug.log", false))
+        assertTrue(ignore.isIgnored("src/test.o", false))
+        assertFalse(ignore.isIgnored("main.c", false))
+        assertTrue(ignore.isIgnored("build", true))
+        assertFalse(ignore.isIgnored("build", false))
+    }
+
+    @Test
+    fun testIgnoreNegation() {
+        val ignore = Ignore()
+        ignore.addPatterns("*.log\n!important.log\n", "")
+
+        assertTrue(ignore.isIgnored("debug.log", false))
+        assertFalse(ignore.isIgnored("important.log", false))
+    }
+
+    @Test
+    fun testIgnoreDoubleStar() {
+        val ignore = Ignore()
+        ignore.addPatterns("**/build\nlogs/**/*.log\n", "")
+
+        assertTrue(ignore.isIgnored("build", false))
+        assertTrue(ignore.isIgnored("src/build", false))
+        assertTrue(ignore.isIgnored("logs/2024/error.log", false))
+    }
+
+    @Test
+    fun testIgnoreWithPath() {
+        val ignore = Ignore()
+        ignore.addPatterns("doc/*.html\n", "")
+
+        assertTrue(ignore.isIgnored("doc/index.html", false))
+        assertFalse(ignore.isIgnored("src/index.html", false))
+    }
+
+    @Test
+    fun testIgnoreLoadFromRepo() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_ignore_load_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            val workdir = repo.workdir!!
+
+            java.io.File(workdir, ".gitignore").writeText("*.o\nbuild/\n")
+
+            val ignore = Ignore.load(repo.gitDir, workdir)
+            assertTrue(ignore.isIgnored("main.o", false))
+            assertTrue(ignore.isIgnored("build", true))
+            assertFalse(ignore.isIgnored("main.c", false))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testIgnoreSubdir() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_ignore_subdir_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            val workdir = repo.workdir!!
+
+            java.io.File(workdir, ".gitignore").writeText("*.o\n")
+            val vendorDir = java.io.File(workdir, "vendor")
+            vendorDir.mkdirs()
+            java.io.File(vendorDir, ".gitignore").writeText("*.tmp\n")
+
+            val ignore = Ignore.load(repo.gitDir, workdir)
+            ignore.loadForPath(workdir, "vendor")
+
+            assertTrue(ignore.isIgnored("main.o", false))
+            assertTrue(ignore.isIgnored("vendor/cache.tmp", false))
+            assertFalse(ignore.isIgnored("src/cache.tmp", false))
         } finally {
             tmp.deleteRecursively()
         }

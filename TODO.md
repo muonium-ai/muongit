@@ -37,7 +37,7 @@
 - [x] Index-to-workdir diff
 - [x] Diff formatting (patch, stat)
 - [x] Status (combined index + workdir)
-- [ ] Ignore (.gitignore) support
+- [x] Ignore (.gitignore) support
 - [ ] Attributes (.gitattributes)
 
 ## Phase 5: Merge & Checkout
