@@ -1773,13 +1773,11 @@ class MuonGitTest {
             addBlobToIndex(repo.gitDir, index, "existing.txt", "index content".toByteArray(), false)
             writeIndex(repo.gitDir, index)
 
-            // Without force
             val r1 = checkoutIndex(repo.gitDir, workdir, CheckoutOptions(force = false))
             assertTrue(r1.updated.isEmpty())
             assertEquals(1, r1.conflicts.size)
             assertEquals("local changes", java.io.File(workdir, "existing.txt").readText())
 
-            // With force
             val r2 = checkoutIndex(repo.gitDir, workdir, CheckoutOptions(force = true))
             assertEquals(1, r2.updated.size)
             assertEquals("index content", java.io.File(workdir, "existing.txt").readText())
@@ -1839,6 +1837,468 @@ class MuonGitTest {
             assertFailsWith<MuonGitException.NotFound> {
                 checkoutPaths(repo.gitDir, workdir, listOf("nonexistent.txt"), CheckoutOptions(force = true))
             }
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    // Remote Tests
+
+    @Test
+    fun testAddAndGetRemote() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_remote_add_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            val remote = addRemote(repo.gitDir, "origin", "https://example.com/repo.git")
+
+            assertEquals("origin", remote.name)
+            assertEquals("https://example.com/repo.git", remote.url)
+            assertEquals(1, remote.fetchRefspecs.size)
+            assertEquals("+refs/heads/*:refs/remotes/origin/*", remote.fetchRefspecs[0])
+
+            val loaded = getRemote(repo.gitDir, "origin")
+            assertEquals("https://example.com/repo.git", loaded.url)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testListRemotes() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_remote_list_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            addRemote(repo.gitDir, "origin", "https://example.com/repo.git")
+            addRemote(repo.gitDir, "upstream", "https://example.com/upstream.git")
+
+            val names = listRemotes(repo.gitDir)
+            assertTrue(names.contains("origin"))
+            assertTrue(names.contains("upstream"))
+            assertEquals(2, names.size)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testRemoveRemote() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_remote_rm_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            addRemote(repo.gitDir, "origin", "https://example.com/repo.git")
+            removeRemote(repo.gitDir, "origin")
+
+            assertFailsWith<MuonGitException.NotFound> { getRemote(repo.gitDir, "origin") }
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testRenameRemote() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_remote_rename_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            addRemote(repo.gitDir, "origin", "https://example.com/repo.git")
+            renameRemote(repo.gitDir, "origin", "upstream")
+
+            assertFailsWith<MuonGitException.NotFound> { getRemote(repo.gitDir, "origin") }
+            val remote = getRemote(repo.gitDir, "upstream")
+            assertEquals("https://example.com/repo.git", remote.url)
+            assertEquals("+refs/heads/*:refs/remotes/upstream/*", remote.fetchRefspecs[0])
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testAddDuplicateRemote() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_remote_dup_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            addRemote(repo.gitDir, "origin", "https://example.com/repo.git")
+            assertFailsWith<MuonGitException.InvalidSpec> {
+                addRemote(repo.gitDir, "origin", "https://other.com/repo.git")
+            }
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testParseRefspec() {
+        val r1 = parseRefspec("+refs/heads/*:refs/remotes/origin/*")!!
+        assertTrue(r1.first)
+        assertEquals("refs/heads/*", r1.second)
+        assertEquals("refs/remotes/origin/*", r1.third)
+
+        val r2 = parseRefspec("refs/heads/main:refs/heads/main")!!
+        assertFalse(r2.first)
+        assertEquals("refs/heads/main", r2.second)
+        assertEquals("refs/heads/main", r2.third)
+
+        assertNull(parseRefspec("no-colon"))
+    }
+
+    @Test
+    fun testGetNonexistentRemote() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_remote_noexist_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            assertFailsWith<MuonGitException.NotFound> { getRemote(repo.gitDir, "nope") }
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    // Three-Way Merge Tests
+
+    @Test
+    fun testMerge3NoChanges() {
+        val base = "line1\nline2\nline3"
+        val result = merge3(base, base, base)
+        assertFalse(result.hasConflicts)
+        assertEquals("line1\nline2\nline3\n", result.toCleanString())
+    }
+
+    @Test
+    fun testMerge3OursOnly() {
+        val result = merge3("line1\nline2\nline3", "line1\nmodified\nline3", "line1\nline2\nline3")
+        assertFalse(result.hasConflicts)
+        assertEquals("line1\nmodified\nline3\n", result.toCleanString())
+    }
+
+    @Test
+    fun testMerge3TheirsOnly() {
+        val result = merge3("line1\nline2\nline3", "line1\nline2\nline3", "line1\nline2\nchanged")
+        assertFalse(result.hasConflicts)
+        assertEquals("line1\nline2\nchanged\n", result.toCleanString())
+    }
+
+    @Test
+    fun testMerge3BothDifferentRegions() {
+        val result = merge3("line1\nline2\nline3", "changed1\nline2\nline3", "line1\nline2\nchanged3")
+        assertFalse(result.hasConflicts)
+        assertEquals("changed1\nline2\nchanged3\n", result.toCleanString())
+    }
+
+    @Test
+    fun testMerge3SameChangeBothSides() {
+        val both = "line1\nSAME\nline3"
+        val result = merge3("line1\nline2\nline3", both, both)
+        assertFalse(result.hasConflicts)
+        assertEquals("line1\nSAME\nline3\n", result.toCleanString())
+    }
+
+    @Test
+    fun testMerge3Conflict() {
+        val result = merge3("line1\nline2\nline3", "line1\nours\nline3", "line1\ntheirs\nline3")
+        assertTrue(result.hasConflicts)
+        assertNull(result.toCleanString())
+        val text = result.toStringWithMarkers()
+        assertTrue(text.contains("<<<<<<< ours"))
+        assertTrue(text.contains("======="))
+        assertTrue(text.contains(">>>>>>> theirs"))
+    }
+
+    @Test
+    fun testMerge3OursAddsLines() {
+        val result = merge3("line1\nline3", "line1\nline2\nline3", "line1\nline3")
+        assertFalse(result.hasConflicts)
+        assertEquals("line1\nline2\nline3\n", result.toCleanString())
+    }
+
+    @Test
+    fun testMerge3TheirsDeletesLines() {
+        val result = merge3("line1\nline2\nline3", "line1\nline2\nline3", "line1\nline3")
+        assertFalse(result.hasConflicts)
+        assertEquals("line1\nline3\n", result.toCleanString())
+    }
+
+    @Test
+    fun testMerge3EmptyBase() {
+        val result = merge3("", "added", "")
+        assertFalse(result.hasConflicts)
+        assertEquals("added\n", result.toCleanString())
+    }
+
+    // Transport Tests
+
+    @Test
+    fun testPktLineEncode() {
+        val encoded = pktLineEncode("hello\n".toByteArray(Charsets.US_ASCII))
+        assertTrue("000ahello\n".toByteArray(Charsets.US_ASCII).contentEquals(encoded))
+    }
+
+    @Test
+    fun testPktLineFlushValue() {
+        assertTrue("0000".toByteArray(Charsets.US_ASCII).contentEquals(pktLineFlush()))
+    }
+
+    @Test
+    fun testPktLineDecode() {
+        val input = "000ahello\n0000".toByteArray(Charsets.US_ASCII)
+        val (lines, consumed) = pktLineDecode(input)
+        assertEquals(14, consumed)
+        assertEquals(2, lines.size)
+        assertEquals(PktLine.Data("hello\n".toByteArray(Charsets.UTF_8)), lines[0])
+        assertEquals(PktLine.Flush, lines[1])
+    }
+
+    @Test
+    fun testPktLineRoundtrip() {
+        val data = "test data here".toByteArray(Charsets.UTF_8)
+        val encoded = pktLineEncode(data)
+        val (lines, _) = pktLineDecode(encoded)
+        assertEquals(1, lines.size)
+        assertEquals(PktLine.Data(data), lines[0])
+    }
+
+    @Test
+    fun testParseRefAdvertisement() {
+        val oidHex = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        val line1 = "$oidHex HEAD\u0000multi_ack thin-pack side-band\n"
+        val line2 = "$oidHex refs/heads/main\n"
+
+        var input = pktLineEncode(line1.toByteArray(Charsets.UTF_8))
+        input += pktLineEncode(line2.toByteArray(Charsets.UTF_8))
+        input += pktLineFlush()
+
+        val (decoded, _) = pktLineDecode(input)
+        val (refs, caps) = parseRefAdvertisement(decoded)
+
+        assertEquals(2, refs.size)
+        assertEquals("HEAD", refs[0].name)
+        assertEquals("refs/heads/main", refs[1].name)
+        assertTrue(caps.has("multi_ack"))
+        assertTrue(caps.has("thin-pack"))
+        assertTrue(caps.has("side-band"))
+        assertFalse(caps.has("ofs-delta"))
+    }
+
+    @Test
+    fun testBuildWantHave() {
+        val want = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val have = OID("bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+        val data = buildWantHave(listOf(want), listOf(have), listOf("multi_ack", "thin-pack"))
+        val text = String(data, Charsets.UTF_8)
+
+        assertTrue(text.contains("want aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d multi_ack thin-pack"))
+        assertTrue(text.contains("have bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"))
+        assertTrue(text.contains("done"))
+    }
+
+    @Test
+    fun testParseGitUrlHttps() {
+        val result = parseGitUrl("https://github.com/user/repo.git")!!
+        assertEquals("https", result.first)
+        assertEquals("github.com", result.second)
+        assertEquals("/user/repo.git", result.third)
+    }
+
+    @Test
+    fun testParseGitUrlSsh() {
+        val result = parseGitUrl("git@github.com:user/repo.git")!!
+        assertEquals("ssh", result.first)
+        assertEquals("git@github.com", result.second)
+        assertEquals("user/repo.git", result.third)
+    }
+
+    @Test
+    fun testParseGitUrlSshProtocol() {
+        val result = parseGitUrl("ssh://git@github.com/user/repo.git")!!
+        assertEquals("ssh", result.first)
+        assertEquals("git@github.com", result.second)
+        assertEquals("/user/repo.git", result.third)
+    }
+
+    @Test
+    fun testServerCapabilitiesGet() {
+        val caps = ServerCapabilities(listOf(
+            "multi_ack",
+            "agent=git/2.30.0",
+            "symref=HEAD:refs/heads/main",
+        ))
+        assertTrue(caps.has("multi_ack"))
+        assertTrue(caps.has("agent"))
+        assertEquals("git/2.30.0", caps.get("agent"))
+        assertEquals("HEAD:refs/heads/main", caps.get("symref"))
+        assertNull(caps.get("multi_ack"))
+    }
+
+    // Fetch/Push/Clone Tests
+
+    @Test
+    fun testRefspecMatchGlob() {
+        assertEquals("main", refspecMatch("refs/heads/main", "refs/heads/*"))
+        assertEquals("feature/x", refspecMatch("refs/heads/feature/x", "refs/heads/*"))
+        assertNull(refspecMatch("refs/tags/v1", "refs/heads/*"))
+    }
+
+    @Test
+    fun testRefspecMatchExact() {
+        assertEquals("", refspecMatch("refs/heads/main", "refs/heads/main"))
+        assertNull(refspecMatch("refs/heads/dev", "refs/heads/main"))
+    }
+
+    @Test
+    fun testApplyRefspecGlob() {
+        assertEquals("refs/remotes/origin/main", applyRefspec("refs/heads/main", "+refs/heads/*:refs/remotes/origin/*"))
+        assertEquals("refs/remotes/origin/feature/x", applyRefspec("refs/heads/feature/x", "+refs/heads/*:refs/remotes/origin/*"))
+    }
+
+    @Test
+    fun testApplyRefspecNoMatch() {
+        assertNull(applyRefspec("refs/tags/v1", "+refs/heads/*:refs/remotes/origin/*"))
+    }
+
+    @Test
+    fun testComputeFetchWants() {
+        val tmp = createTempDir("test_fetch_wants")
+        try {
+            val repo = Repository.init(tmp.absolutePath)
+            val oid1 = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            val oid2 = OID("bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+            val remoteRefs = listOf(
+                RemoteRef(oid1, "refs/heads/main"),
+                RemoteRef(oid2, "refs/heads/dev"),
+                RemoteRef(oid1, "refs/tags/v1"),
+            )
+            val refspecs = listOf("+refs/heads/*:refs/remotes/origin/*")
+
+            val neg = computeFetchWants(remoteRefs, refspecs, repo.gitDir)
+            assertEquals(2, neg.wants.size)
+            assertEquals(2, neg.matchedRefs.size)
+            assertEquals("refs/remotes/origin/main", neg.matchedRefs[0].localName)
+            assertEquals("refs/remotes/origin/dev", neg.matchedRefs[1].localName)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testComputeFetchWantsSkipsExisting() {
+        val tmp = createTempDir("test_fetch_skip")
+        try {
+            val repo = Repository.init(tmp.absolutePath)
+            val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            writeReference(repo.gitDir, "refs/remotes/origin/main", oid)
+
+            val remoteRefs = listOf(RemoteRef(oid, "refs/heads/main"))
+            val refspecs = listOf("+refs/heads/*:refs/remotes/origin/*")
+
+            val neg = computeFetchWants(remoteRefs, refspecs, repo.gitDir)
+            assertEquals(0, neg.wants.size)
+            assertEquals(1, neg.matchedRefs.size)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testUpdateRefsFromFetch() {
+        val tmp = createTempDir("test_fetch_update")
+        try {
+            val repo = Repository.init(tmp.absolutePath)
+            val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            val matched = listOf(MatchedRef("refs/heads/main", "refs/remotes/origin/main", oid))
+
+            val count = updateRefsFromFetch(repo.gitDir, matched)
+            assertEquals(1, count)
+
+            val resolved = resolveReference(repo.gitDir, "refs/remotes/origin/main")
+            assertEquals(oid, resolved)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testComputePushUpdates() {
+        val tmp = createTempDir("test_push_updates")
+        try {
+            val repo = Repository.init(tmp.absolutePath)
+            val localOid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            val remoteOid = OID("bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+            writeReference(repo.gitDir, "refs/heads/main", localOid)
+
+            val remoteRefs = listOf(RemoteRef(remoteOid, "refs/heads/main"))
+            val updates = computePushUpdates(
+                listOf("refs/heads/main:refs/heads/main"),
+                repo.gitDir,
+                remoteRefs
+            )
+
+            assertEquals(1, updates.size)
+            assertEquals(localOid, updates[0].srcOid)
+            assertEquals(remoteOid, updates[0].dstOid)
+            assertFalse(updates[0].force)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testBuildPushReportOutput() {
+        val oid1 = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val oid2 = OID("bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val updates = listOf(PushUpdate("refs/heads/main", "refs/heads/main", oid1, oid2, false))
+        val report = buildPushReport(updates)
+        assertTrue(report.contains(oid1.hex))
+        assertTrue(report.contains(oid2.hex))
+        assertTrue(report.contains("refs/heads/main"))
+    }
+
+    @Test
+    fun testCloneSetupCreatesRepo() {
+        val tmp = createTempDir("test_clone_setup")
+        try {
+            val repo = cloneSetup(tmp.absolutePath, "https://example.com/repo.git")
+            val remote = getRemote(repo.gitDir, "origin")
+            assertEquals("https://example.com/repo.git", remote.url)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testCloneFinishSetsUpRefs() {
+        val tmp = createTempDir("test_clone_finish")
+        try {
+            val repo = Repository.init(tmp.absolutePath)
+            val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            cloneFinish(repo.gitDir, "origin", "main", oid)
+
+            val resolved = resolveReference(repo.gitDir, "refs/heads/main")
+            assertEquals(oid, resolved)
+
+            val head = java.io.File(repo.gitDir, "HEAD").readText()
+            assertTrue(head.contains("refs/heads/main"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testDefaultBranchFromCapsValue() {
+        val caps = ServerCapabilities(listOf("multi_ack", "symref=HEAD:refs/heads/main"))
+        assertEquals("main", defaultBranchFromCaps(caps))
+
+        val caps2 = ServerCapabilities(listOf("multi_ack"))
+        assertNull(defaultBranchFromCaps(caps2))
+    }
+
+    @Test
+    fun testCloneSetupWithBranch() {
+        val tmp = createTempDir("test_clone_branch")
+        try {
+            val opts = CloneOptions(branch = "develop")
+            val repo = cloneSetup(tmp.absolutePath, "https://example.com/repo.git", opts)
+            val head = java.io.File(repo.gitDir, "HEAD").readText()
+            assertTrue(head.contains("refs/heads/develop"))
         } finally {
             tmp.deleteRecursively()
         }
