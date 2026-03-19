@@ -1607,6 +1607,108 @@ class MuonGitTest {
         }
     }
 
+    // Merge Base Tests
+
+    private fun makeCommit(gitDir: java.io.File, treeOid: OID, parents: List<OID>, msg: String): OID {
+        val sb = StringBuilder()
+        sb.append("tree ${treeOid.hex}\n")
+        for (p in parents) sb.append("parent ${p.hex}\n")
+        sb.append("author Test <test@test.com> 1000000000 +0000\n")
+        sb.append("committer Test <test@test.com> 1000000000 +0000\n")
+        sb.append("\n$msg")
+        return writeLooseObject(gitDir, ObjectType.COMMIT, sb.toString().toByteArray())
+    }
+
+    private fun makeEmptyTree(gitDir: java.io.File): OID {
+        return writeLooseObject(gitDir, ObjectType.TREE, ByteArray(0))
+    }
+
+    @Test
+    fun testMergeBaseSameCommit() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_mb_same_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            val tree = makeEmptyTree(repo.gitDir)
+            val c1 = makeCommit(repo.gitDir, tree, emptyList(), "initial")
+
+            val result = mergeBase(repo.gitDir, c1, c1)
+            assertEquals(c1, result)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testMergeBaseLinearHistory() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_mb_linear_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            val tree = makeEmptyTree(repo.gitDir)
+            val a = makeCommit(repo.gitDir, tree, emptyList(), "A")
+            val b = makeCommit(repo.gitDir, tree, listOf(a), "B")
+            val c = makeCommit(repo.gitDir, tree, listOf(b), "C")
+
+            assertEquals(b, mergeBase(repo.gitDir, b, c))
+            assertEquals(a, mergeBase(repo.gitDir, a, c))
+            assertEquals(a, mergeBase(repo.gitDir, a, b))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testMergeBaseForkAndMerge() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_mb_fork_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            val tree = makeEmptyTree(repo.gitDir)
+            val a = makeCommit(repo.gitDir, tree, emptyList(), "A")
+            val b = makeCommit(repo.gitDir, tree, listOf(a), "B")
+            val c = makeCommit(repo.gitDir, tree, listOf(a), "C")
+            val d = makeCommit(repo.gitDir, tree, listOf(b, c), "D")
+
+            assertEquals(a, mergeBase(repo.gitDir, b, c))
+            assertEquals(b, mergeBase(repo.gitDir, b, d))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testMergeBaseNoCommonAncestor() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_mb_disjoint_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            val tree = makeEmptyTree(repo.gitDir)
+            val a = makeCommit(repo.gitDir, tree, emptyList(), "A")
+            val b = makeCommit(repo.gitDir, tree, listOf(a), "B")
+            val c = makeCommit(repo.gitDir, tree, emptyList(), "C")
+            val d = makeCommit(repo.gitDir, tree, listOf(c), "D")
+
+            assertNull(mergeBase(repo.gitDir, b, d))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testMergeBasesMultiple() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_mb_multi_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            val tree = makeEmptyTree(repo.gitDir)
+            val a = makeCommit(repo.gitDir, tree, emptyList(), "A")
+            val b = makeCommit(repo.gitDir, tree, listOf(a), "B")
+            val c = makeCommit(repo.gitDir, tree, listOf(a), "C")
+
+            val bases = mergeBases(repo.gitDir, b, c)
+            assertEquals(1, bases.size)
+            assertEquals(a, bases[0])
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
     // Pack Index Tests
 
     private fun sortedTestOids(): Triple<List<OID>, IntArray, LongArray> {

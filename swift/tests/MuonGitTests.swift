@@ -1421,6 +1421,99 @@ final class MuonGitTests: XCTestCase {
         XCTAssertFalse(ignore.isIgnored("src/cache.tmp", isDir: false))
     }
 
+    // MARK: - Merge Base Tests
+
+    private func makeCommit(gitDir: String, treeOid: OID, parents: [OID], msg: String) throws -> OID {
+        var data = "tree \(treeOid.hex)\n"
+        for p in parents {
+            data += "parent \(p.hex)\n"
+        }
+        data += "author Test <test@test.com> 1000000000 +0000\n"
+        data += "committer Test <test@test.com> 1000000000 +0000\n"
+        data += "\n\(msg)"
+        return try writeLooseObject(gitDir: gitDir, type: .commit, data: Data(data.utf8))
+    }
+
+    private func makeEmptyTree(gitDir: String) throws -> OID {
+        return try writeLooseObject(gitDir: gitDir, type: .tree, data: Data())
+    }
+
+    func testMergeBaseSameCommit() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_mb_same"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let tree = try makeEmptyTree(gitDir: repo.gitDir)
+        let c1 = try makeCommit(gitDir: repo.gitDir, treeOid: tree, parents: [], msg: "initial")
+
+        let result = try mergeBase(gitDir: repo.gitDir, oid1: c1, oid2: c1)
+        XCTAssertEqual(result, c1)
+    }
+
+    func testMergeBaseLinearHistory() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_mb_linear"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let tree = try makeEmptyTree(gitDir: repo.gitDir)
+        let a = try makeCommit(gitDir: repo.gitDir, treeOid: tree, parents: [], msg: "A")
+        let b = try makeCommit(gitDir: repo.gitDir, treeOid: tree, parents: [a], msg: "B")
+        let c = try makeCommit(gitDir: repo.gitDir, treeOid: tree, parents: [b], msg: "C")
+
+        XCTAssertEqual(try mergeBase(gitDir: repo.gitDir, oid1: b, oid2: c), b)
+        XCTAssertEqual(try mergeBase(gitDir: repo.gitDir, oid1: a, oid2: c), a)
+        XCTAssertEqual(try mergeBase(gitDir: repo.gitDir, oid1: a, oid2: b), a)
+    }
+
+    func testMergeBaseForkAndMerge() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_mb_fork"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let tree = try makeEmptyTree(gitDir: repo.gitDir)
+        let a = try makeCommit(gitDir: repo.gitDir, treeOid: tree, parents: [], msg: "A")
+        let b = try makeCommit(gitDir: repo.gitDir, treeOid: tree, parents: [a], msg: "B")
+        let c = try makeCommit(gitDir: repo.gitDir, treeOid: tree, parents: [a], msg: "C")
+        let d = try makeCommit(gitDir: repo.gitDir, treeOid: tree, parents: [b, c], msg: "D")
+
+        XCTAssertEqual(try mergeBase(gitDir: repo.gitDir, oid1: b, oid2: c), a)
+        XCTAssertEqual(try mergeBase(gitDir: repo.gitDir, oid1: b, oid2: d), b)
+    }
+
+    func testMergeBaseNoCommonAncestor() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_mb_disjoint"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let tree = try makeEmptyTree(gitDir: repo.gitDir)
+        let a = try makeCommit(gitDir: repo.gitDir, treeOid: tree, parents: [], msg: "A")
+        let b = try makeCommit(gitDir: repo.gitDir, treeOid: tree, parents: [a], msg: "B")
+        let c = try makeCommit(gitDir: repo.gitDir, treeOid: tree, parents: [], msg: "C")
+        let d = try makeCommit(gitDir: repo.gitDir, treeOid: tree, parents: [c], msg: "D")
+
+        XCTAssertNil(try mergeBase(gitDir: repo.gitDir, oid1: b, oid2: d))
+    }
+
+    func testMergeBasesMultiple() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_mb_multi"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let tree = try makeEmptyTree(gitDir: repo.gitDir)
+        let a = try makeCommit(gitDir: repo.gitDir, treeOid: tree, parents: [], msg: "A")
+        let b = try makeCommit(gitDir: repo.gitDir, treeOid: tree, parents: [a], msg: "B")
+        let c = try makeCommit(gitDir: repo.gitDir, treeOid: tree, parents: [a], msg: "C")
+
+        let bases = try mergeBases(gitDir: repo.gitDir, oid1: b, oid2: c)
+        XCTAssertEqual(bases.count, 1)
+        XCTAssertEqual(bases[0], a)
+    }
+
     // MARK: - Pack Index Tests
 
     private func sortedTestOids() -> ([OID], [UInt32], [UInt64]) {
