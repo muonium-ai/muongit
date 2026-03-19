@@ -1,5 +1,5 @@
-//! Tree-to-tree and index-to-workdir diff
-//! Parity: libgit2 src/libgit2/diff.c
+//! Tree-to-tree, index-to-workdir diff and diff formatting
+//! Parity: libgit2 src/libgit2/diff.c, diff_print.c
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -246,6 +246,312 @@ fn collect_workdir_files(
     Ok(())
 }
 
+// --- Diff formatting (patch and stat) ---
+
+/// A single edit operation in a line-level diff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditKind {
+    Equal,
+    Insert,
+    Delete,
+}
+
+/// A line-level edit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Edit {
+    pub kind: EditKind,
+    pub old_line: usize, // 1-based, 0 if insert
+    pub new_line: usize, // 1-based, 0 if delete
+    pub text: String,
+}
+
+/// A unified diff hunk.
+#[derive(Debug, Clone)]
+pub struct DiffHunk {
+    pub old_start: usize,
+    pub old_count: usize,
+    pub new_start: usize,
+    pub new_count: usize,
+    pub edits: Vec<Edit>,
+}
+
+/// Compute a Myers-style line diff between two texts.
+/// Returns a list of edits (equal, insert, delete).
+pub fn diff_lines(old_text: &str, new_text: &str) -> Vec<Edit> {
+    let old_lines: Vec<&str> = if old_text.is_empty() {
+        Vec::new()
+    } else {
+        old_text.split('\n').collect()
+    };
+    let new_lines: Vec<&str> = if new_text.is_empty() {
+        Vec::new()
+    } else {
+        new_text.split('\n').collect()
+    };
+
+    // Compute LCS using classic DP
+    let n = old_lines.len();
+    let m = new_lines.len();
+    let mut dp = vec![vec![0u32; m + 1]; n + 1];
+
+    for i in 1..=n {
+        for j in 1..=m {
+            if old_lines[i - 1] == new_lines[j - 1] {
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+            } else {
+                dp[i][j] = std::cmp::max(dp[i - 1][j], dp[i][j - 1]);
+            }
+        }
+    }
+
+    // Backtrack to produce edits
+    let mut edits = Vec::new();
+    let mut i = n;
+    let mut j = m;
+
+    while i > 0 || j > 0 {
+        if i > 0 && j > 0 && old_lines[i - 1] == new_lines[j - 1] {
+            edits.push(Edit {
+                kind: EditKind::Equal,
+                old_line: i,
+                new_line: j,
+                text: old_lines[i - 1].to_string(),
+            });
+            i -= 1;
+            j -= 1;
+        } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
+            edits.push(Edit {
+                kind: EditKind::Insert,
+                old_line: 0,
+                new_line: j,
+                text: new_lines[j - 1].to_string(),
+            });
+            j -= 1;
+        } else {
+            edits.push(Edit {
+                kind: EditKind::Delete,
+                old_line: i,
+                new_line: 0,
+                text: old_lines[i - 1].to_string(),
+            });
+            i -= 1;
+        }
+    }
+
+    edits.reverse();
+    edits
+}
+
+/// Group edits into unified diff hunks with the given context lines (default 3).
+pub fn make_hunks(edits: &[Edit], context: usize) -> Vec<DiffHunk> {
+    let mut hunks = Vec::new();
+    let change_indices: Vec<usize> = edits
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.kind != EditKind::Equal)
+        .map(|(i, _)| i)
+        .collect();
+
+    if change_indices.is_empty() {
+        return hunks;
+    }
+
+    let mut groups: Vec<(usize, usize)> = Vec::new(); // (first_change_idx, last_change_idx)
+
+    let mut ci = 0;
+    while ci < change_indices.len() {
+        let start = change_indices[ci];
+        let mut end = start;
+        while ci + 1 < change_indices.len()
+            && change_indices[ci + 1] <= end + 2 * context + 1
+        {
+            ci += 1;
+            end = change_indices[ci];
+        }
+        groups.push((start, end));
+        ci += 1;
+    }
+
+    for (first_change, last_change) in groups {
+        let hunk_start = first_change.saturating_sub(context);
+        let hunk_end = std::cmp::min(last_change + context + 1, edits.len());
+
+        let hunk_edits: Vec<Edit> = edits[hunk_start..hunk_end].to_vec();
+
+        // Compute old/new line ranges
+        let mut old_start = 0;
+        let mut new_start = 0;
+        let mut old_count = 0;
+        let mut new_count = 0;
+
+        for (i, edit) in hunk_edits.iter().enumerate() {
+            if i == 0 {
+                match edit.kind {
+                    EditKind::Equal | EditKind::Delete => old_start = edit.old_line,
+                    EditKind::Insert => {
+                        old_start = edit.new_line; // approximation
+                        // find first old_line in this hunk
+                        for e in &hunk_edits {
+                            if e.old_line > 0 {
+                                old_start = e.old_line;
+                                break;
+                            }
+                        }
+                    }
+                }
+                match edit.kind {
+                    EditKind::Equal | EditKind::Insert => new_start = edit.new_line,
+                    EditKind::Delete => {
+                        new_start = edit.old_line;
+                        for e in &hunk_edits {
+                            if e.new_line > 0 {
+                                new_start = e.new_line;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            match edit.kind {
+                EditKind::Equal => {
+                    old_count += 1;
+                    new_count += 1;
+                }
+                EditKind::Delete => old_count += 1,
+                EditKind::Insert => new_count += 1,
+            }
+        }
+
+        hunks.push(DiffHunk {
+            old_start,
+            old_count,
+            new_start,
+            new_count,
+            edits: hunk_edits,
+        });
+    }
+
+    hunks
+}
+
+/// Format a diff as a unified patch string.
+/// `old_path` and `new_path` are the file paths for the `---`/`+++` header lines.
+pub fn format_patch(old_path: &str, new_path: &str, old_text: &str, new_text: &str, context: usize) -> String {
+    let edits = diff_lines(old_text, new_text);
+    let hunks = make_hunks(&edits, context);
+
+    if hunks.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    out.push_str(&format!("--- a/{}\n", old_path));
+    out.push_str(&format!("+++ b/{}\n", new_path));
+
+    for hunk in &hunks {
+        out.push_str(&format!(
+            "@@ -{},{} +{},{} @@\n",
+            hunk.old_start, hunk.old_count, hunk.new_start, hunk.new_count
+        ));
+        for edit in &hunk.edits {
+            match edit.kind {
+                EditKind::Equal => {
+                    out.push(' ');
+                    out.push_str(&edit.text);
+                    out.push('\n');
+                }
+                EditKind::Delete => {
+                    out.push('-');
+                    out.push_str(&edit.text);
+                    out.push('\n');
+                }
+                EditKind::Insert => {
+                    out.push('+');
+                    out.push_str(&edit.text);
+                    out.push('\n');
+                }
+            }
+        }
+    }
+
+    out
+}
+
+/// A stat entry for a single file.
+#[derive(Debug, Clone)]
+pub struct DiffStatEntry {
+    pub path: String,
+    pub insertions: usize,
+    pub deletions: usize,
+}
+
+/// Compute diff stats for a single file.
+pub fn diff_stat(path: &str, old_text: &str, new_text: &str) -> DiffStatEntry {
+    let edits = diff_lines(old_text, new_text);
+    let insertions = edits.iter().filter(|e| e.kind == EditKind::Insert).count();
+    let deletions = edits.iter().filter(|e| e.kind == EditKind::Delete).count();
+    DiffStatEntry {
+        path: path.to_string(),
+        insertions,
+        deletions,
+    }
+}
+
+/// Format stat entries as a diffstat string (like `git diff --stat`).
+pub fn format_stat(stats: &[DiffStatEntry]) -> String {
+    if stats.is_empty() {
+        return String::new();
+    }
+
+    let max_path_len = stats.iter().map(|s| s.path.len()).max().unwrap_or(0);
+    let max_changes = stats.iter().map(|s| s.insertions + s.deletions).max().unwrap_or(0);
+    let bar_width = 40usize;
+
+    let mut out = String::new();
+    let mut total_insertions = 0;
+    let mut total_deletions = 0;
+
+    for stat in stats {
+        let changes = stat.insertions + stat.deletions;
+        total_insertions += stat.insertions;
+        total_deletions += stat.deletions;
+
+        let (plus_count, minus_count) = if max_changes > 0 && changes > 0 {
+            let total_bars = std::cmp::min(changes, bar_width);
+            let plus_bars = if changes > 0 {
+                (stat.insertions as f64 / changes as f64 * total_bars as f64).round() as usize
+            } else {
+                0
+            };
+            let minus_bars = total_bars - plus_bars;
+            (plus_bars, minus_bars)
+        } else {
+            (0, 0)
+        };
+
+        out.push_str(&format!(
+            " {:width$} | {:>5} {}{}\n",
+            stat.path,
+            changes,
+            "+".repeat(plus_count),
+            "-".repeat(minus_count),
+            width = max_path_len,
+        ));
+    }
+
+    let file_word = if stats.len() == 1 { "file" } else { "files" };
+    out.push_str(&format!(
+        " {} {} changed, {} insertions(+), {} deletions(-)\n",
+        stats.len(),
+        file_word,
+        total_insertions,
+        total_deletions,
+    ));
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,6 +679,102 @@ mod tests {
         assert_eq!(deltas[1].path, "c.txt");
         assert_eq!(deltas[2].status, DiffStatus::Added);
         assert_eq!(deltas[2].path, "d.txt");
+    }
+
+    // --- Diff formatting tests ---
+
+    #[test]
+    fn test_diff_lines_identical() {
+        let edits = diff_lines("a\nb\nc\n", "a\nb\nc\n");
+        assert!(edits.iter().all(|e| e.kind == EditKind::Equal));
+    }
+
+    #[test]
+    fn test_diff_lines_insert() {
+        let edits = diff_lines("a\nc\n", "a\nb\nc\n");
+        let inserts: Vec<_> = edits.iter().filter(|e| e.kind == EditKind::Insert).collect();
+        assert_eq!(inserts.len(), 1);
+        assert_eq!(inserts[0].text, "b");
+    }
+
+    #[test]
+    fn test_diff_lines_delete() {
+        let edits = diff_lines("a\nb\nc\n", "a\nc\n");
+        let deletes: Vec<_> = edits.iter().filter(|e| e.kind == EditKind::Delete).collect();
+        assert_eq!(deletes.len(), 1);
+        assert_eq!(deletes[0].text, "b");
+    }
+
+    #[test]
+    fn test_diff_lines_modify() {
+        let edits = diff_lines("a\nb\nc\n", "a\nB\nc\n");
+        let deletes: Vec<_> = edits.iter().filter(|e| e.kind == EditKind::Delete).collect();
+        let inserts: Vec<_> = edits.iter().filter(|e| e.kind == EditKind::Insert).collect();
+        assert_eq!(deletes.len(), 1);
+        assert_eq!(deletes[0].text, "b");
+        assert_eq!(inserts.len(), 1);
+        assert_eq!(inserts[0].text, "B");
+    }
+
+    #[test]
+    fn test_format_patch_basic() {
+        let old = "line1\nline2\nline3\n";
+        let new = "line1\nmodified\nline3\n";
+        let patch = format_patch("file.txt", "file.txt", old, new, 3);
+        assert!(patch.contains("--- a/file.txt"));
+        assert!(patch.contains("+++ b/file.txt"));
+        assert!(patch.contains("@@"));
+        assert!(patch.contains("-line2"));
+        assert!(patch.contains("+modified"));
+    }
+
+    #[test]
+    fn test_format_patch_no_changes() {
+        let text = "same\n";
+        let patch = format_patch("f.txt", "f.txt", text, text, 3);
+        assert!(patch.is_empty());
+    }
+
+    #[test]
+    fn test_format_patch_added_file() {
+        let patch = format_patch("new.txt", "new.txt", "", "hello\nworld\n", 3);
+        assert!(patch.contains("+hello"));
+        assert!(patch.contains("+world"));
+    }
+
+    #[test]
+    fn test_format_patch_deleted_file() {
+        let patch = format_patch("old.txt", "old.txt", "goodbye\nworld\n", "", 3);
+        assert!(patch.contains("-goodbye"));
+        assert!(patch.contains("-world"));
+    }
+
+    #[test]
+    fn test_diff_stat_basic() {
+        let stat = diff_stat("file.txt", "a\nb\nc\n", "a\nB\nc\nd\n");
+        assert_eq!(stat.path, "file.txt");
+        assert_eq!(stat.deletions, 1); // "b" deleted
+        assert_eq!(stat.insertions, 2); // "B" and "d" inserted
+    }
+
+    #[test]
+    fn test_format_stat_output() {
+        let stats = vec![
+            DiffStatEntry { path: "file.txt".into(), insertions: 3, deletions: 1 },
+            DiffStatEntry { path: "other.rs".into(), insertions: 0, deletions: 5 },
+        ];
+        let output = format_stat(&stats);
+        assert!(output.contains("file.txt"));
+        assert!(output.contains("other.rs"));
+        assert!(output.contains("2 files changed"));
+        assert!(output.contains("3 insertions(+)"));
+        assert!(output.contains("6 deletions(-)"));
+    }
+
+    #[test]
+    fn test_format_stat_empty() {
+        let output = format_stat(&[]);
+        assert!(output.is_empty());
     }
 
     // --- Index-to-workdir diff tests ---

@@ -1100,6 +1100,91 @@ final class MuonGitTests: XCTestCase {
         XCTAssertEqual(new[0].path, "d.txt")
     }
 
+    // MARK: - Diff Formatting Tests
+
+    func testDiffLinesIdentical() {
+        let edits = diffLines(oldText: "a\nb\nc\n", newText: "a\nb\nc\n")
+        XCTAssert(edits.allSatisfy { $0.kind == .equal })
+    }
+
+    func testDiffLinesInsert() {
+        let edits = diffLines(oldText: "a\nc\n", newText: "a\nb\nc\n")
+        let inserts = edits.filter { $0.kind == .insert }
+        XCTAssertEqual(inserts.count, 1)
+        XCTAssertEqual(inserts[0].text, "b")
+    }
+
+    func testDiffLinesDelete() {
+        let edits = diffLines(oldText: "a\nb\nc\n", newText: "a\nc\n")
+        let deletes = edits.filter { $0.kind == .delete }
+        XCTAssertEqual(deletes.count, 1)
+        XCTAssertEqual(deletes[0].text, "b")
+    }
+
+    func testDiffLinesModify() {
+        let edits = diffLines(oldText: "a\nb\nc\n", newText: "a\nB\nc\n")
+        let deletes = edits.filter { $0.kind == .delete }
+        let inserts = edits.filter { $0.kind == .insert }
+        XCTAssertEqual(deletes.count, 1)
+        XCTAssertEqual(deletes[0].text, "b")
+        XCTAssertEqual(inserts.count, 1)
+        XCTAssertEqual(inserts[0].text, "B")
+    }
+
+    func testFormatPatchBasic() {
+        let old = "line1\nline2\nline3\n"
+        let new = "line1\nmodified\nline3\n"
+        let patch = formatPatch(oldPath: "file.txt", newPath: "file.txt", oldText: old, newText: new)
+        XCTAssert(patch.contains("--- a/file.txt"))
+        XCTAssert(patch.contains("+++ b/file.txt"))
+        XCTAssert(patch.contains("@@"))
+        XCTAssert(patch.contains("-line2"))
+        XCTAssert(patch.contains("+modified"))
+    }
+
+    func testFormatPatchNoChanges() {
+        let text = "same\n"
+        let patch = formatPatch(oldPath: "f.txt", newPath: "f.txt", oldText: text, newText: text)
+        XCTAssert(patch.isEmpty)
+    }
+
+    func testFormatPatchAddedFile() {
+        let patch = formatPatch(oldPath: "new.txt", newPath: "new.txt", oldText: "", newText: "hello\nworld\n")
+        XCTAssert(patch.contains("+hello"))
+        XCTAssert(patch.contains("+world"))
+    }
+
+    func testFormatPatchDeletedFile() {
+        let patch = formatPatch(oldPath: "old.txt", newPath: "old.txt", oldText: "goodbye\nworld\n", newText: "")
+        XCTAssert(patch.contains("-goodbye"))
+        XCTAssert(patch.contains("-world"))
+    }
+
+    func testDiffStatBasic() {
+        let stat = diffStat(path: "file.txt", oldText: "a\nb\nc\n", newText: "a\nB\nc\nd\n")
+        XCTAssertEqual(stat.path, "file.txt")
+        XCTAssertEqual(stat.deletions, 1)
+        XCTAssertEqual(stat.insertions, 2)
+    }
+
+    func testFormatStatOutput() {
+        let stats = [
+            DiffStatEntry(path: "file.txt", insertions: 3, deletions: 1),
+            DiffStatEntry(path: "other.rs", insertions: 0, deletions: 5),
+        ]
+        let output = formatStat(stats: stats)
+        XCTAssert(output.contains("file.txt"))
+        XCTAssert(output.contains("other.rs"))
+        XCTAssert(output.contains("2 files changed"))
+        XCTAssert(output.contains("3 insertions(+)"))
+        XCTAssert(output.contains("6 deletions(-)"))
+    }
+
+    func testFormatStatEmpty() {
+        let output = formatStat(stats: [])
+        XCTAssert(output.isEmpty)
+    }
+
     // MARK: - Index-to-Workdir Diff Tests
 
     func testDiffWorkdirClean() throws {
