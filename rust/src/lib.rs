@@ -28,6 +28,7 @@ pub mod pack;
 pub mod transport;
 pub mod fetch;
 pub mod attributes;
+pub mod submodule;
 
 pub use oid::OID;
 pub use types::{ObjectType, Signature};
