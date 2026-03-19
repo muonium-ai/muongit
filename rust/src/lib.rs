@@ -27,6 +27,7 @@ pub mod pack_index;
 pub mod pack;
 pub mod transport;
 pub mod fetch;
+pub mod attributes;
 
 pub use oid::OID;
 pub use types::{ObjectType, Signature};

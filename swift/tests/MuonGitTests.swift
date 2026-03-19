@@ -2044,6 +2044,115 @@ final class MuonGitTests: XCTestCase {
         XCTAssertTrue(head.contains("refs/heads/develop"))
     }
 
+    // MARK: - Attributes Tests
+
+    func testParseSimpleAttrs() {
+        let attrs = Attributes()
+        attrs.parse("*.txt text\n*.bin binary\n")
+
+        XCTAssertEqual(attrs.get("hello.txt", attr: "text"), .set)
+        XCTAssertTrue(attrs.isBinary("image.bin"))
+        XCTAssertFalse(attrs.isBinary("hello.txt"))
+    }
+
+    func testParseUnsetAndValue() {
+        let attrs = Attributes()
+        attrs.parse("*.md text eol=lf\n*.png -text -diff\n")
+
+        XCTAssertEqual(attrs.get("README.md", attr: "text"), .set)
+        XCTAssertEqual(attrs.get("README.md", attr: "eol"), .value("lf"))
+        XCTAssertEqual(attrs.eol("README.md"), "lf")
+        XCTAssertEqual(attrs.get("image.png", attr: "text"), .unset)
+        XCTAssertTrue(attrs.isBinary("image.png"))
+    }
+
+    func testBinaryMacro() {
+        let attrs = Attributes()
+        attrs.parse("*.jpg binary\n")
+
+        XCTAssertTrue(attrs.isBinary("photo.jpg"))
+        XCTAssertEqual(attrs.get("photo.jpg", attr: "diff"), .unset)
+        XCTAssertEqual(attrs.get("photo.jpg", attr: "merge"), .unset)
+        XCTAssertEqual(attrs.get("photo.jpg", attr: "text"), .unset)
+    }
+
+    func testLastMatchWins() {
+        let attrs = Attributes()
+        attrs.parse("* text\n*.bin -text\n")
+
+        XCTAssertEqual(attrs.get("file.txt", attr: "text"), .set)
+        XCTAssertEqual(attrs.get("file.bin", attr: "text"), .unset)
+    }
+
+    func testPathWithDirectory() {
+        let attrs = Attributes()
+        attrs.parse("src/*.rs text eol=lf\n")
+
+        XCTAssertEqual(attrs.get("src/main.rs", attr: "text"), .set)
+        XCTAssertNil(attrs.get("main.rs", attr: "text"))
+    }
+
+    func testGetAllAttrs() {
+        let attrs = Attributes()
+        attrs.parse("*.rs text eol=lf diff\n")
+
+        let all = attrs.getAll("main.rs")
+        XCTAssertEqual(all.count, 3)
+        XCTAssertTrue(all.contains(where: { $0.0 == "text" && $0.1 == .set }))
+        XCTAssertTrue(all.contains(where: { $0.0 == "eol" && $0.1 == .value("lf") }))
+        XCTAssertTrue(all.contains(where: { $0.0 == "diff" && $0.1 == .set }))
+    }
+
+    func testCommentAndEmptyLines() {
+        let attrs = Attributes()
+        attrs.parse("# comment\n\n*.txt text\n  # another comment\n")
+
+        XCTAssertEqual(attrs.get("file.txt", attr: "text"), .set)
+        XCTAssertEqual(attrs.ruleCount, 1)
+    }
+
+    func testGlobPatterns() {
+        let attrs = Attributes()
+        attrs.parse("*.txt text\n*.[ch] diff\nMakefile export-ignore\n")
+
+        XCTAssertEqual(attrs.get("file.txt", attr: "text"), .set)
+        XCTAssertEqual(attrs.get("main.c", attr: "diff"), .set)
+        XCTAssertEqual(attrs.get("util.h", attr: "diff"), .set)
+        XCTAssertNil(attrs.get("main.rs", attr: "diff"))
+        XCTAssertEqual(attrs.get("Makefile", attr: "export-ignore"), .set)
+    }
+
+    func testLoadAttrsFile() throws {
+        let tmp = NSTemporaryDirectory() + "test_attrs_load_\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let path = (tmp as NSString).appendingPathComponent(".gitattributes")
+        try "*.txt text\n*.bin binary\n".write(toFile: path, atomically: true, encoding: .utf8)
+
+        let attrs = Attributes.load(path: path)
+        XCTAssertEqual(attrs.get("file.txt", attr: "text"), .set)
+        XCTAssertTrue(attrs.isBinary("data.bin"))
+    }
+
+    func testLoadForRepo() throws {
+        let tmp = NSTemporaryDirectory() + "test_attrs_repo_\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let workdir = repo.workdir!
+
+        try "*.txt text\n".write(toFile: (workdir as NSString).appendingPathComponent(".gitattributes"), atomically: true, encoding: .utf8)
+
+        let infoDir = (repo.gitDir as NSString).appendingPathComponent("info")
+        try FileManager.default.createDirectory(atPath: infoDir, withIntermediateDirectories: true)
+        try "*.bin binary\n".write(toFile: (infoDir as NSString).appendingPathComponent("attributes"), atomically: true, encoding: .utf8)
+
+        let attrs = Attributes.loadForRepo(gitDir: repo.gitDir, workdir: workdir)
+        XCTAssertEqual(attrs.get("file.txt", attr: "text"), .set)
+        XCTAssertTrue(attrs.isBinary("data.bin"))
+    }
+
     // MARK: - Pack Index Tests
 
     private func sortedTestOids() -> ([OID], [UInt32], [UInt64]) {

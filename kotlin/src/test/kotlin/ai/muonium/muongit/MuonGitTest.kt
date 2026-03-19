@@ -2304,6 +2304,128 @@ class MuonGitTest {
         }
     }
 
+    // Attributes Tests
+
+    @Test
+    fun testParseSimpleAttrs() {
+        val attrs = Attributes()
+        attrs.parse("*.txt text\n*.bin binary\n")
+
+        assertEquals(AttrValue.Set, attrs.get("hello.txt", "text"))
+        assertTrue(attrs.isBinary("image.bin"))
+        assertFalse(attrs.isBinary("hello.txt"))
+    }
+
+    @Test
+    fun testParseUnsetAndValue() {
+        val attrs = Attributes()
+        attrs.parse("*.md text eol=lf\n*.png -text -diff\n")
+
+        assertEquals(AttrValue.Set, attrs.get("README.md", "text"))
+        assertEquals(AttrValue.Value("lf"), attrs.get("README.md", "eol"))
+        assertEquals("lf", attrs.eol("README.md"))
+        assertEquals(AttrValue.Unset, attrs.get("image.png", "text"))
+        assertTrue(attrs.isBinary("image.png"))
+    }
+
+    @Test
+    fun testBinaryMacro() {
+        val attrs = Attributes()
+        attrs.parse("*.jpg binary\n")
+
+        assertTrue(attrs.isBinary("photo.jpg"))
+        assertEquals(AttrValue.Unset, attrs.get("photo.jpg", "diff"))
+        assertEquals(AttrValue.Unset, attrs.get("photo.jpg", "merge"))
+        assertEquals(AttrValue.Unset, attrs.get("photo.jpg", "text"))
+    }
+
+    @Test
+    fun testLastMatchWins() {
+        val attrs = Attributes()
+        attrs.parse("* text\n*.bin -text\n")
+
+        assertEquals(AttrValue.Set, attrs.get("file.txt", "text"))
+        assertEquals(AttrValue.Unset, attrs.get("file.bin", "text"))
+    }
+
+    @Test
+    fun testPathWithDirectory() {
+        val attrs = Attributes()
+        attrs.parse("src/*.rs text eol=lf\n")
+
+        assertEquals(AttrValue.Set, attrs.get("src/main.rs", "text"))
+        assertNull(attrs.get("main.rs", "text"))
+    }
+
+    @Test
+    fun testGetAllAttrs() {
+        val attrs = Attributes()
+        attrs.parse("*.rs text eol=lf diff\n")
+
+        val all = attrs.getAll("main.rs")
+        assertEquals(3, all.size)
+        assertTrue(all.any { it.first == "text" && it.second == AttrValue.Set })
+        assertTrue(all.any { it.first == "eol" && it.second == AttrValue.Value("lf") })
+        assertTrue(all.any { it.first == "diff" && it.second == AttrValue.Set })
+    }
+
+    @Test
+    fun testCommentAndEmptyLines() {
+        val attrs = Attributes()
+        attrs.parse("# comment\n\n*.txt text\n  # another comment\n")
+
+        assertEquals(AttrValue.Set, attrs.get("file.txt", "text"))
+        assertEquals(1, attrs.rules.size)
+    }
+
+    @Test
+    fun testGlobPatterns() {
+        val attrs = Attributes()
+        attrs.parse("*.txt text\n*.[ch] diff\nMakefile export-ignore\n")
+
+        assertEquals(AttrValue.Set, attrs.get("file.txt", "text"))
+        assertEquals(AttrValue.Set, attrs.get("main.c", "diff"))
+        assertEquals(AttrValue.Set, attrs.get("util.h", "diff"))
+        assertNull(attrs.get("main.rs", "diff"))
+        assertEquals(AttrValue.Set, attrs.get("Makefile", "export-ignore"))
+    }
+
+    @Test
+    fun testLoadAttrsFile() {
+        val tmp = createTempDir("test_attrs_load")
+        try {
+            val path = java.io.File(tmp, ".gitattributes")
+            path.writeText("*.txt text\n*.bin binary\n")
+
+            val attrs = Attributes.load(path)
+            assertEquals(AttrValue.Set, attrs.get("file.txt", "text"))
+            assertTrue(attrs.isBinary("data.bin"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testLoadForRepo() {
+        val tmp = createTempDir("test_attrs_repo")
+        try {
+            val repo = Repository.init(tmp.absolutePath)
+            val workdir = repo.workdir!!
+
+            java.io.File(workdir, ".gitattributes").writeText("*.txt text\n")
+
+            val infoDir = java.io.File(repo.gitDir, "info")
+            infoDir.mkdirs()
+            java.io.File(infoDir, "attributes").writeText("*.bin binary\n")
+
+            val attrs = Attributes.loadForRepo(repo.gitDir, workdir)
+            assertEquals(AttrValue.Set, attrs.get("file.txt", "text"))
+            assertTrue(attrs.isBinary("data.bin"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
     // Pack Index Tests
 
     private fun sortedTestOids(): Triple<List<OID>, IntArray, LongArray> {
