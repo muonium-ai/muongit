@@ -19,6 +19,7 @@ pub mod index;
 pub mod diff;
 pub mod status;
 pub mod ignore;
+pub mod checkout;
 pub mod merge;
 pub mod merge_base;
 pub mod remote;

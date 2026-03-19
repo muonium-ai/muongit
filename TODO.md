@@ -41,7 +41,7 @@
 - [ ] Attributes (.gitattributes)
 
 ## Phase 5: Merge & Checkout
-- [ ] Checkout (index to workdir)
+- [x] Checkout (index to workdir)
 - [x] Merge base computation
 - [x] Three-way merge
 - [x] Merge conflict detection

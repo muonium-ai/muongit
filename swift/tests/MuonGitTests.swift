@@ -1514,6 +1514,128 @@ final class MuonGitTests: XCTestCase {
         XCTAssertEqual(bases[0], a)
     }
 
+    // MARK: - Checkout Tests
+
+    private func addBlobToIndex(gitDir: String, index: inout Index, path: String, content: Data, executable: Bool) throws {
+        let oid = try writeLooseObject(gitDir: gitDir, type: .blob, data: content)
+        let mode: UInt32 = executable ? 0o100755 : 0o100644
+        index.add(IndexEntry(
+            ctimeSecs: 0, ctimeNanos: 0, mtimeSecs: 0, mtimeNanos: 0,
+            dev: 0, ino: 0, mode: mode, uid: 0, gid: 0,
+            fileSize: UInt32(content.count), oid: oid,
+            flags: UInt16(min(path.count, 0xFFF)), path: path
+        ))
+    }
+
+    func testCheckoutBasic() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_checkout_basic"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let workdir = repo.workdir!
+        var index = Index()
+        try addBlobToIndex(gitDir: repo.gitDir, index: &index, path: "hello.txt", content: Data("Hello, world!\n".utf8), executable: false)
+        try addBlobToIndex(gitDir: repo.gitDir, index: &index, path: "src/main.rs", content: Data("fn main() {}\n".utf8), executable: false)
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        let result = try checkoutIndex(gitDir: repo.gitDir, workdir: workdir, options: CheckoutOptions(force: true))
+        XCTAssertEqual(result.updated.count, 2)
+        XCTAssertTrue(result.conflicts.isEmpty)
+        XCTAssertEqual(try String(contentsOfFile: (workdir as NSString).appendingPathComponent("hello.txt"), encoding: .utf8), "Hello, world!\n")
+        XCTAssertEqual(try String(contentsOfFile: (workdir as NSString).appendingPathComponent("src/main.rs"), encoding: .utf8), "fn main() {}\n")
+    }
+
+    func testCheckoutCreatesDirectories() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_checkout_dirs"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let workdir = repo.workdir!
+        var index = Index()
+        try addBlobToIndex(gitDir: repo.gitDir, index: &index, path: "a/b/c/deep.txt", content: Data("deep content".utf8), executable: false)
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        let result = try checkoutIndex(gitDir: repo.gitDir, workdir: workdir, options: CheckoutOptions(force: true))
+        XCTAssertEqual(result.updated.count, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: (workdir as NSString).appendingPathComponent("a/b/c/deep.txt")))
+    }
+
+    func testCheckoutConflictDetection() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_checkout_conflict"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let workdir = repo.workdir!
+
+        try "local changes".write(toFile: (workdir as NSString).appendingPathComponent("existing.txt"), atomically: true, encoding: .utf8)
+
+        var index = Index()
+        try addBlobToIndex(gitDir: repo.gitDir, index: &index, path: "existing.txt", content: Data("index content".utf8), executable: false)
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        let result1 = try checkoutIndex(gitDir: repo.gitDir, workdir: workdir, options: CheckoutOptions(force: false))
+        XCTAssertTrue(result1.updated.isEmpty)
+        XCTAssertEqual(result1.conflicts.count, 1)
+        XCTAssertEqual(try String(contentsOfFile: (workdir as NSString).appendingPathComponent("existing.txt"), encoding: .utf8), "local changes")
+
+        let result2 = try checkoutIndex(gitDir: repo.gitDir, workdir: workdir, options: CheckoutOptions(force: true))
+        XCTAssertEqual(result2.updated.count, 1)
+        XCTAssertEqual(try String(contentsOfFile: (workdir as NSString).appendingPathComponent("existing.txt"), encoding: .utf8), "index content")
+    }
+
+    func testCheckoutExecutableMode() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_checkout_exec"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let workdir = repo.workdir!
+        var index = Index()
+        try addBlobToIndex(gitDir: repo.gitDir, index: &index, path: "script.sh", content: Data("#!/bin/sh\necho hi\n".utf8), executable: true)
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        _ = try checkoutIndex(gitDir: repo.gitDir, workdir: workdir, options: CheckoutOptions(force: true))
+        let attrs = try FileManager.default.attributesOfItem(atPath: (workdir as NSString).appendingPathComponent("script.sh"))
+        let perms = (attrs[.posixPermissions] as! Int)
+        XCTAssertTrue(perms & 0o111 != 0, "file should be executable")
+    }
+
+    func testCheckoutPaths() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_checkout_paths"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let workdir = repo.workdir!
+        var index = Index()
+        try addBlobToIndex(gitDir: repo.gitDir, index: &index, path: "a.txt", content: Data("aaa".utf8), executable: false)
+        try addBlobToIndex(gitDir: repo.gitDir, index: &index, path: "b.txt", content: Data("bbb".utf8), executable: false)
+        try addBlobToIndex(gitDir: repo.gitDir, index: &index, path: "c.txt", content: Data("ccc".utf8), executable: false)
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        let result = try checkoutPaths(gitDir: repo.gitDir, workdir: workdir, paths: ["a.txt", "c.txt"], options: CheckoutOptions(force: true))
+        XCTAssertEqual(result.updated.count, 2)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: (workdir as NSString).appendingPathComponent("a.txt")))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: (workdir as NSString).appendingPathComponent("b.txt")))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: (workdir as NSString).appendingPathComponent("c.txt")))
+    }
+
+    func testCheckoutPathNotInIndex() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_checkout_notfound"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let workdir = repo.workdir!
+        let index = Index()
+        try writeIndex(gitDir: repo.gitDir, index: index)
+
+        XCTAssertThrowsError(try checkoutPaths(gitDir: repo.gitDir, workdir: workdir, paths: ["nonexistent.txt"], options: CheckoutOptions(force: true)))
+    }
+
     // MARK: - Remote Tests
 
     func testAddAndGetRemote() throws {
