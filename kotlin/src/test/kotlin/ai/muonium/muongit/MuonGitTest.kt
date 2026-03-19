@@ -1818,6 +1818,77 @@ class MuonGitTest {
         }
     }
 
+    // Three-Way Merge Tests
+
+    @Test
+    fun testMerge3NoChanges() {
+        val base = "line1\nline2\nline3"
+        val result = merge3(base, base, base)
+        assertFalse(result.hasConflicts)
+        assertEquals("line1\nline2\nline3\n", result.toCleanString())
+    }
+
+    @Test
+    fun testMerge3OursOnly() {
+        val result = merge3("line1\nline2\nline3", "line1\nmodified\nline3", "line1\nline2\nline3")
+        assertFalse(result.hasConflicts)
+        assertEquals("line1\nmodified\nline3\n", result.toCleanString())
+    }
+
+    @Test
+    fun testMerge3TheirsOnly() {
+        val result = merge3("line1\nline2\nline3", "line1\nline2\nline3", "line1\nline2\nchanged")
+        assertFalse(result.hasConflicts)
+        assertEquals("line1\nline2\nchanged\n", result.toCleanString())
+    }
+
+    @Test
+    fun testMerge3BothDifferentRegions() {
+        val result = merge3("line1\nline2\nline3", "changed1\nline2\nline3", "line1\nline2\nchanged3")
+        assertFalse(result.hasConflicts)
+        assertEquals("changed1\nline2\nchanged3\n", result.toCleanString())
+    }
+
+    @Test
+    fun testMerge3SameChangeBothSides() {
+        val both = "line1\nSAME\nline3"
+        val result = merge3("line1\nline2\nline3", both, both)
+        assertFalse(result.hasConflicts)
+        assertEquals("line1\nSAME\nline3\n", result.toCleanString())
+    }
+
+    @Test
+    fun testMerge3Conflict() {
+        val result = merge3("line1\nline2\nline3", "line1\nours\nline3", "line1\ntheirs\nline3")
+        assertTrue(result.hasConflicts)
+        assertNull(result.toCleanString())
+        val text = result.toStringWithMarkers()
+        assertTrue(text.contains("<<<<<<< ours"))
+        assertTrue(text.contains("======="))
+        assertTrue(text.contains(">>>>>>> theirs"))
+    }
+
+    @Test
+    fun testMerge3OursAddsLines() {
+        val result = merge3("line1\nline3", "line1\nline2\nline3", "line1\nline3")
+        assertFalse(result.hasConflicts)
+        assertEquals("line1\nline2\nline3\n", result.toCleanString())
+    }
+
+    @Test
+    fun testMerge3TheirsDeletesLines() {
+        val result = merge3("line1\nline2\nline3", "line1\nline2\nline3", "line1\nline3")
+        assertFalse(result.hasConflicts)
+        assertEquals("line1\nline3\n", result.toCleanString())
+    }
+
+    @Test
+    fun testMerge3EmptyBase() {
+        val result = merge3("", "added", "")
+        assertFalse(result.hasConflicts)
+        assertEquals("added\n", result.toCleanString())
+    }
+
     // Pack Index Tests
 
     private fun sortedTestOids(): Triple<List<OID>, IntArray, LongArray> {

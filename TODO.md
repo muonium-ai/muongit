@@ -43,8 +43,8 @@
 ## Phase 5: Merge & Checkout
 - [ ] Checkout (index to workdir)
 - [x] Merge base computation
-- [ ] Three-way merge
-- [ ] Merge conflict detection
+- [x] Three-way merge
+- [x] Merge conflict detection
 - [ ] Cherry-pick
 - [ ] Revert
 - [ ] Rebase
