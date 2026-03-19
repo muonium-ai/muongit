@@ -1608,6 +1608,104 @@ final class MuonGitTests: XCTestCase {
         XCTAssertThrowsError(try getRemote(gitDir: repo.gitDir, name: "nope"))
     }
 
+    // MARK: - Transport Tests
+
+    func testPktLineEncode() {
+        let encoded = pktLineEncode("hello\n".data(using: .utf8)!)
+        XCTAssertEqual(encoded, "000ahello\n".data(using: .ascii)!)
+    }
+
+    func testPktLineFlushValue() {
+        XCTAssertEqual(pktLineFlush(), "0000".data(using: .ascii)!)
+    }
+
+    func testPktLineDecode() throws {
+        let input = "000ahello\n0000".data(using: .ascii)!
+        let result = try pktLineDecode(input).get()
+        let (lines, consumed) = result
+        XCTAssertEqual(consumed, 14)
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertEqual(lines[0], PktLine.data("hello\n".data(using: .utf8)!))
+        XCTAssertEqual(lines[1], PktLine.flush)
+    }
+
+    func testPktLineRoundtrip() throws {
+        let data = "test data here".data(using: .utf8)!
+        let encoded = pktLineEncode(data)
+        let result = try pktLineDecode(encoded).get()
+        XCTAssertEqual(result.0.count, 1)
+        XCTAssertEqual(result.0[0], PktLine.data(data))
+    }
+
+    func testParseRefAdvertisement() throws {
+        let oidHex = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        let line1 = "\(oidHex) HEAD\0multi_ack thin-pack side-band\n"
+        let line2 = "\(oidHex) refs/heads/main\n"
+
+        var input = Data()
+        input.append(pktLineEncode(line1.data(using: .utf8)!))
+        input.append(pktLineEncode(line2.data(using: .utf8)!))
+        input.append(pktLineFlush())
+
+        let decoded = try pktLineDecode(input).get()
+        let parsed = try parseRefAdvertisement(decoded.0).get()
+        let (refs, caps) = parsed
+
+        XCTAssertEqual(refs.count, 2)
+        XCTAssertEqual(refs[0].name, "HEAD")
+        XCTAssertEqual(refs[1].name, "refs/heads/main")
+        XCTAssertTrue(caps.has("multi_ack"))
+        XCTAssertTrue(caps.has("thin-pack"))
+        XCTAssertTrue(caps.has("side-band"))
+        XCTAssertFalse(caps.has("ofs-delta"))
+    }
+
+    func testBuildWantHave() throws {
+        let want = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let have = OID(hex: "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+        let data = buildWantHave(wants: [want], haves: [have], caps: ["multi_ack", "thin-pack"])
+        let text = String(data: data, encoding: .utf8)!
+
+        XCTAssertTrue(text.contains("want aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d multi_ack thin-pack"))
+        XCTAssertTrue(text.contains("have bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"))
+        XCTAssertTrue(text.contains("done"))
+    }
+
+    func testParseGitURLHttps() {
+        let result = parseGitURL("https://github.com/user/repo.git")!
+        XCTAssertEqual(result.scheme, "https")
+        XCTAssertEqual(result.host, "github.com")
+        XCTAssertEqual(result.path, "/user/repo.git")
+    }
+
+    func testParseGitURLSsh() {
+        let result = parseGitURL("git@github.com:user/repo.git")!
+        XCTAssertEqual(result.scheme, "ssh")
+        XCTAssertEqual(result.host, "git@github.com")
+        XCTAssertEqual(result.path, "user/repo.git")
+    }
+
+    func testParseGitURLSshProtocol() {
+        let result = parseGitURL("ssh://git@github.com/user/repo.git")!
+        XCTAssertEqual(result.scheme, "ssh")
+        XCTAssertEqual(result.host, "git@github.com")
+        XCTAssertEqual(result.path, "/user/repo.git")
+    }
+
+    func testServerCapabilitiesGet() {
+        let caps = ServerCapabilities(capabilities: [
+            "multi_ack",
+            "agent=git/2.30.0",
+            "symref=HEAD:refs/heads/main",
+        ])
+        XCTAssertTrue(caps.has("multi_ack"))
+        XCTAssertTrue(caps.has("agent"))
+        XCTAssertEqual(caps.get("agent"), "git/2.30.0")
+        XCTAssertEqual(caps.get("symref"), "HEAD:refs/heads/main")
+        XCTAssertNil(caps.get("multi_ack"))
+    }
+
     // MARK: - Pack Index Tests
 
     private func sortedTestOids() -> ([OID], [UInt32], [UInt64]) {

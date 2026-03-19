@@ -1818,6 +1818,111 @@ class MuonGitTest {
         }
     }
 
+    // Transport Tests
+
+    @Test
+    fun testPktLineEncode() {
+        val encoded = pktLineEncode("hello\n".toByteArray(Charsets.US_ASCII))
+        assertTrue("000ahello\n".toByteArray(Charsets.US_ASCII).contentEquals(encoded))
+    }
+
+    @Test
+    fun testPktLineFlushValue() {
+        assertTrue("0000".toByteArray(Charsets.US_ASCII).contentEquals(pktLineFlush()))
+    }
+
+    @Test
+    fun testPktLineDecode() {
+        val input = "000ahello\n0000".toByteArray(Charsets.US_ASCII)
+        val (lines, consumed) = pktLineDecode(input)
+        assertEquals(14, consumed)
+        assertEquals(2, lines.size)
+        assertEquals(PktLine.Data("hello\n".toByteArray(Charsets.UTF_8)), lines[0])
+        assertEquals(PktLine.Flush, lines[1])
+    }
+
+    @Test
+    fun testPktLineRoundtrip() {
+        val data = "test data here".toByteArray(Charsets.UTF_8)
+        val encoded = pktLineEncode(data)
+        val (lines, _) = pktLineDecode(encoded)
+        assertEquals(1, lines.size)
+        assertEquals(PktLine.Data(data), lines[0])
+    }
+
+    @Test
+    fun testParseRefAdvertisement() {
+        val oidHex = "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+        val line1 = "$oidHex HEAD\u0000multi_ack thin-pack side-band\n"
+        val line2 = "$oidHex refs/heads/main\n"
+
+        var input = pktLineEncode(line1.toByteArray(Charsets.UTF_8))
+        input += pktLineEncode(line2.toByteArray(Charsets.UTF_8))
+        input += pktLineFlush()
+
+        val (decoded, _) = pktLineDecode(input)
+        val (refs, caps) = parseRefAdvertisement(decoded)
+
+        assertEquals(2, refs.size)
+        assertEquals("HEAD", refs[0].name)
+        assertEquals("refs/heads/main", refs[1].name)
+        assertTrue(caps.has("multi_ack"))
+        assertTrue(caps.has("thin-pack"))
+        assertTrue(caps.has("side-band"))
+        assertFalse(caps.has("ofs-delta"))
+    }
+
+    @Test
+    fun testBuildWantHave() {
+        val want = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val have = OID("bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+        val data = buildWantHave(listOf(want), listOf(have), listOf("multi_ack", "thin-pack"))
+        val text = String(data, Charsets.UTF_8)
+
+        assertTrue(text.contains("want aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d multi_ack thin-pack"))
+        assertTrue(text.contains("have bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"))
+        assertTrue(text.contains("done"))
+    }
+
+    @Test
+    fun testParseGitUrlHttps() {
+        val result = parseGitUrl("https://github.com/user/repo.git")!!
+        assertEquals("https", result.first)
+        assertEquals("github.com", result.second)
+        assertEquals("/user/repo.git", result.third)
+    }
+
+    @Test
+    fun testParseGitUrlSsh() {
+        val result = parseGitUrl("git@github.com:user/repo.git")!!
+        assertEquals("ssh", result.first)
+        assertEquals("git@github.com", result.second)
+        assertEquals("user/repo.git", result.third)
+    }
+
+    @Test
+    fun testParseGitUrlSshProtocol() {
+        val result = parseGitUrl("ssh://git@github.com/user/repo.git")!!
+        assertEquals("ssh", result.first)
+        assertEquals("git@github.com", result.second)
+        assertEquals("/user/repo.git", result.third)
+    }
+
+    @Test
+    fun testServerCapabilitiesGet() {
+        val caps = ServerCapabilities(listOf(
+            "multi_ack",
+            "agent=git/2.30.0",
+            "symref=HEAD:refs/heads/main",
+        ))
+        assertTrue(caps.has("multi_ack"))
+        assertTrue(caps.has("agent"))
+        assertEquals("git/2.30.0", caps.get("agent"))
+        assertEquals("HEAD:refs/heads/main", caps.get("symref"))
+        assertNull(caps.get("multi_ack"))
+    }
+
     // Pack Index Tests
 
     private fun sortedTestOids(): Triple<List<OID>, IntArray, LongArray> {
