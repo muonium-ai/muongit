@@ -20,6 +20,14 @@ impl Config {
         }
     }
 
+    /// Parse config from a string
+    pub fn parse(content: &str) -> Self {
+        Self {
+            entries: parse_config(content),
+            path: None,
+        }
+    }
+
     /// Load a config file from disk
     pub fn load(path: &Path) -> Result<Self, MuonGitError> {
         let content = std::fs::read_to_string(path)?;
