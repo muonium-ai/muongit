@@ -1314,6 +1314,113 @@ final class MuonGitTests: XCTestCase {
         XCTAssertEqual(added[0].path, "d.txt")
     }
 
+    // MARK: - Ignore / Glob Tests
+
+    func testGlobMatchBasic() {
+        XCTAssertTrue(globMatch("*.txt", "hello.txt"))
+        XCTAssertFalse(globMatch("*.txt", "hello.rs"))
+        XCTAssertTrue(globMatch("hello.*", "hello.txt"))
+        XCTAssertTrue(globMatch("?ello.txt", "hello.txt"))
+        XCTAssertFalse(globMatch("?ello.txt", "hhello.txt"))
+    }
+
+    func testGlobMatchStarNoSlash() {
+        XCTAssertFalse(globMatch("*.txt", "dir/hello.txt"))
+        XCTAssertTrue(globMatch("*.txt", "hello.txt"))
+    }
+
+    func testGlobMatchDoubleStar() {
+        XCTAssertTrue(globMatch("**/*.txt", "hello.txt"))
+        XCTAssertTrue(globMatch("**/*.txt", "dir/hello.txt"))
+        XCTAssertTrue(globMatch("**/*.txt", "a/b/c/hello.txt"))
+        XCTAssertTrue(globMatch("**/build", "build"))
+        XCTAssertTrue(globMatch("**/build", "src/build"))
+    }
+
+    func testGlobMatchCharClass() {
+        XCTAssertTrue(globMatch("[abc].txt", "a.txt"))
+        XCTAssertTrue(globMatch("[abc].txt", "b.txt"))
+        XCTAssertFalse(globMatch("[abc].txt", "d.txt"))
+        XCTAssertTrue(globMatch("[a-z].txt", "m.txt"))
+        XCTAssertFalse(globMatch("[a-z].txt", "M.txt"))
+        XCTAssertTrue(globMatch("[!abc].txt", "d.txt"))
+        XCTAssertFalse(globMatch("[!abc].txt", "a.txt"))
+    }
+
+    func testIgnoreBasic() {
+        var ignore = Ignore()
+        ignore.addPatterns("*.o\n*.log\nbuild/\n", baseDir: "")
+
+        XCTAssertTrue(ignore.isIgnored("main.o", isDir: false))
+        XCTAssertTrue(ignore.isIgnored("debug.log", isDir: false))
+        XCTAssertTrue(ignore.isIgnored("src/test.o", isDir: false))
+        XCTAssertFalse(ignore.isIgnored("main.c", isDir: false))
+        XCTAssertTrue(ignore.isIgnored("build", isDir: true))
+        XCTAssertFalse(ignore.isIgnored("build", isDir: false))
+    }
+
+    func testIgnoreNegation() {
+        var ignore = Ignore()
+        ignore.addPatterns("*.log\n!important.log\n", baseDir: "")
+
+        XCTAssertTrue(ignore.isIgnored("debug.log", isDir: false))
+        XCTAssertFalse(ignore.isIgnored("important.log", isDir: false))
+    }
+
+    func testIgnoreDoubleStar() {
+        var ignore = Ignore()
+        ignore.addPatterns("**/build\nlogs/**/*.log\n", baseDir: "")
+
+        XCTAssertTrue(ignore.isIgnored("build", isDir: false))
+        XCTAssertTrue(ignore.isIgnored("src/build", isDir: false))
+        XCTAssertTrue(ignore.isIgnored("logs/2024/error.log", isDir: false))
+    }
+
+    func testIgnoreWithPath() {
+        var ignore = Ignore()
+        ignore.addPatterns("doc/*.html\n", baseDir: "")
+
+        XCTAssertTrue(ignore.isIgnored("doc/index.html", isDir: false))
+        XCTAssertFalse(ignore.isIgnored("src/index.html", isDir: false))
+    }
+
+    func testIgnoreLoadFromRepo() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_ignore_load"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let workdir = repo.workdir!
+
+        try "*.o\nbuild/\n".write(toFile: (workdir as NSString).appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+
+        let ignore = Ignore.load(gitDir: repo.gitDir, workdir: workdir)
+        XCTAssertTrue(ignore.isIgnored("main.o", isDir: false))
+        XCTAssertTrue(ignore.isIgnored("build", isDir: true))
+        XCTAssertFalse(ignore.isIgnored("main.c", isDir: false))
+    }
+
+    func testIgnoreSubdir() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_ignore_subdir"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let workdir = repo.workdir!
+
+        try "*.o\n".write(toFile: (workdir as NSString).appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        let vendorDir = (workdir as NSString).appendingPathComponent("vendor")
+        try FileManager.default.createDirectory(atPath: vendorDir, withIntermediateDirectories: true)
+        try "*.tmp\n".write(toFile: (vendorDir as NSString).appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+
+        var ignore = Ignore.load(gitDir: repo.gitDir, workdir: workdir)
+        ignore.loadForPath(workdir: workdir, relDir: "vendor")
+
+        XCTAssertTrue(ignore.isIgnored("main.o", isDir: false))
+        XCTAssertTrue(ignore.isIgnored("vendor/cache.tmp", isDir: false))
+        XCTAssertFalse(ignore.isIgnored("src/cache.tmp", isDir: false))
+    }
+
     // MARK: - Pack Index Tests
 
     private func sortedTestOids() -> ([OID], [UInt32], [UInt64]) {
