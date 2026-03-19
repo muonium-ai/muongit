@@ -34,7 +34,7 @@
 
 ## Phase 4: Diff & Status
 - [x] Tree-to-tree diff
-- [ ] Index-to-workdir diff
+- [x] Index-to-workdir diff
 - [ ] Diff formatting (patch, stat)
 - [x] Status (combined index + workdir)
 - [ ] Ignore (.gitignore) support
