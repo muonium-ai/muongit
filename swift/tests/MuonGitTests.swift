@@ -1768,6 +1768,160 @@ final class MuonGitTests: XCTestCase {
         XCTAssertNil(caps.get("multi_ack"))
     }
 
+    // MARK: - Fetch/Push/Clone Tests
+
+    func testRefspecMatchGlob() {
+        XCTAssertEqual(refspecMatch("refs/heads/main", pattern: "refs/heads/*"), "main")
+        XCTAssertEqual(refspecMatch("refs/heads/feature/x", pattern: "refs/heads/*"), "feature/x")
+        XCTAssertNil(refspecMatch("refs/tags/v1", pattern: "refs/heads/*"))
+    }
+
+    func testRefspecMatchExact() {
+        XCTAssertEqual(refspecMatch("refs/heads/main", pattern: "refs/heads/main"), "")
+        XCTAssertNil(refspecMatch("refs/heads/dev", pattern: "refs/heads/main"))
+    }
+
+    func testApplyRefspecGlob() {
+        let result = applyRefspec("refs/heads/main", refspec: "+refs/heads/*:refs/remotes/origin/*")
+        XCTAssertEqual(result, "refs/remotes/origin/main")
+
+        let result2 = applyRefspec("refs/heads/feature/x", refspec: "+refs/heads/*:refs/remotes/origin/*")
+        XCTAssertEqual(result2, "refs/remotes/origin/feature/x")
+    }
+
+    func testApplyRefspecNoMatch() {
+        let result = applyRefspec("refs/tags/v1", refspec: "+refs/heads/*:refs/remotes/origin/*")
+        XCTAssertNil(result)
+    }
+
+    func testComputeFetchWants() throws {
+        let tmp = NSTemporaryDirectory() + "test_fetch_wants_\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let oid1 = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let oid2 = OID(hex: "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+        let remoteRefs = [
+            RemoteRef(oid: oid1, name: "refs/heads/main"),
+            RemoteRef(oid: oid2, name: "refs/heads/dev"),
+            RemoteRef(oid: oid1, name: "refs/tags/v1"),
+        ]
+        let refspecs = ["+refs/heads/*:refs/remotes/origin/*"]
+
+        let neg = computeFetchWants(remoteRefs: remoteRefs, refspecs: refspecs, gitDir: repo.gitDir)
+        XCTAssertEqual(neg.wants.count, 2)
+        XCTAssertEqual(neg.matchedRefs.count, 2)
+        XCTAssertEqual(neg.matchedRefs[0].localName, "refs/remotes/origin/main")
+        XCTAssertEqual(neg.matchedRefs[1].localName, "refs/remotes/origin/dev")
+    }
+
+    func testComputeFetchWantsSkipsExisting() throws {
+        let tmp = NSTemporaryDirectory() + "test_fetch_skip_\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        try writeReference(gitDir: repo.gitDir, name: "refs/remotes/origin/main", oid: oid)
+
+        let remoteRefs = [RemoteRef(oid: oid, name: "refs/heads/main")]
+        let refspecs = ["+refs/heads/*:refs/remotes/origin/*"]
+
+        let neg = computeFetchWants(remoteRefs: remoteRefs, refspecs: refspecs, gitDir: repo.gitDir)
+        XCTAssertEqual(neg.wants.count, 0)
+        XCTAssertEqual(neg.matchedRefs.count, 1)
+    }
+
+    func testUpdateRefsFromFetch() throws {
+        let tmp = NSTemporaryDirectory() + "test_fetch_update_\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let matched = [MatchedRef(remoteName: "refs/heads/main", localName: "refs/remotes/origin/main", oid: oid)]
+
+        let count = try updateRefsFromFetch(gitDir: repo.gitDir, matchedRefs: matched)
+        XCTAssertEqual(count, 1)
+
+        let resolved = try resolveReference(gitDir: repo.gitDir, name: "refs/remotes/origin/main")
+        XCTAssertEqual(resolved, oid)
+    }
+
+    func testComputePushUpdates() throws {
+        let tmp = NSTemporaryDirectory() + "test_push_updates_\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let localOid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let remoteOid = OID(hex: "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+
+        try writeReference(gitDir: repo.gitDir, name: "refs/heads/main", oid: localOid)
+
+        let remoteRefs = [RemoteRef(oid: remoteOid, name: "refs/heads/main")]
+        let updates = try computePushUpdates(
+            pushRefspecs: ["refs/heads/main:refs/heads/main"],
+            gitDir: repo.gitDir,
+            remoteRefs: remoteRefs
+        )
+
+        XCTAssertEqual(updates.count, 1)
+        XCTAssertEqual(updates[0].srcOid, localOid)
+        XCTAssertEqual(updates[0].dstOid, remoteOid)
+        XCTAssertFalse(updates[0].force)
+    }
+
+    func testBuildPushReportOutput() {
+        let oid1 = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let oid2 = OID(hex: "bbf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let updates = [PushUpdate(srcRef: "refs/heads/main", dstRef: "refs/heads/main", srcOid: oid1, dstOid: oid2, force: false)]
+        let report = buildPushReport(updates)
+        XCTAssertTrue(report.contains(oid1.hex))
+        XCTAssertTrue(report.contains(oid2.hex))
+        XCTAssertTrue(report.contains("refs/heads/main"))
+    }
+
+    func testCloneSetupCreatesRepo() throws {
+        let tmp = NSTemporaryDirectory() + "test_clone_setup_\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try cloneSetup(path: tmp, url: "https://example.com/repo.git")
+        let remote = try getRemote(gitDir: repo.gitDir, name: "origin")
+        XCTAssertEqual(remote.url, "https://example.com/repo.git")
+    }
+
+    func testCloneFinishSetsUpRefs() throws {
+        let tmp = NSTemporaryDirectory() + "test_clone_finish_\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        try cloneFinish(gitDir: repo.gitDir, remoteName: "origin", defaultBranch: "main", headOid: oid)
+
+        let resolved = try resolveReference(gitDir: repo.gitDir, name: "refs/heads/main")
+        XCTAssertEqual(resolved, oid)
+
+        let head = try String(contentsOfFile: (repo.gitDir as NSString).appendingPathComponent("HEAD"), encoding: .utf8)
+        XCTAssertTrue(head.contains("refs/heads/main"))
+    }
+
+    func testDefaultBranchFromCapsValue() {
+        let caps = ServerCapabilities(capabilities: ["multi_ack", "symref=HEAD:refs/heads/main"])
+        XCTAssertEqual(defaultBranchFromCaps(caps), "main")
+
+        let caps2 = ServerCapabilities(capabilities: ["multi_ack"])
+        XCTAssertNil(defaultBranchFromCaps(caps2))
+    }
+
+    func testCloneSetupWithBranch() throws {
+        let tmp = NSTemporaryDirectory() + "test_clone_branch_\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let opts = CloneOptions(branch: "develop")
+        let repo = try cloneSetup(path: tmp, url: "https://example.com/repo.git", options: opts)
+        let head = try String(contentsOfFile: (repo.gitDir as NSString).appendingPathComponent("HEAD"), encoding: .utf8)
+        XCTAssertTrue(head.contains("refs/heads/develop"))
+    }
+
     // MARK: - Pack Index Tests
 
     private func sortedTestOids() -> ([OID], [UInt32], [UInt64]) {
