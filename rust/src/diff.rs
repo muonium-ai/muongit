@@ -373,11 +373,7 @@ pub fn make_hunks(edits: &[Edit], context: usize) -> Vec<DiffHunk> {
     }
 
     for (first_change, last_change) in groups {
-        let hunk_start = if first_change > context {
-            first_change - context
-        } else {
-            0
-        };
+        let hunk_start = first_change.saturating_sub(context);
         let hunk_end = std::cmp::min(last_change + context + 1, edits.len());
 
         let hunk_edits: Vec<Edit> = edits[hunk_start..hunk_end].to_vec();
