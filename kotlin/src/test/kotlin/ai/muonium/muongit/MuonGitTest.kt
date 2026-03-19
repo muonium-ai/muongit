@@ -1249,6 +1249,102 @@ class MuonGitTest {
         }
     }
 
+    // Diff Formatting Tests
+
+    @Test
+    fun testDiffLinesIdentical() {
+        val edits = diffLines("a\nb\nc\n", "a\nb\nc\n")
+        assertTrue(edits.all { it.kind == EditKind.EQUAL })
+    }
+
+    @Test
+    fun testDiffLinesInsert() {
+        val edits = diffLines("a\nc\n", "a\nb\nc\n")
+        val inserts = edits.filter { it.kind == EditKind.INSERT }
+        assertEquals(1, inserts.size)
+        assertEquals("b", inserts[0].text)
+    }
+
+    @Test
+    fun testDiffLinesDelete() {
+        val edits = diffLines("a\nb\nc\n", "a\nc\n")
+        val deletes = edits.filter { it.kind == EditKind.DELETE }
+        assertEquals(1, deletes.size)
+        assertEquals("b", deletes[0].text)
+    }
+
+    @Test
+    fun testDiffLinesModify() {
+        val edits = diffLines("a\nb\nc\n", "a\nB\nc\n")
+        val deletes = edits.filter { it.kind == EditKind.DELETE }
+        val inserts = edits.filter { it.kind == EditKind.INSERT }
+        assertEquals(1, deletes.size)
+        assertEquals("b", deletes[0].text)
+        assertEquals(1, inserts.size)
+        assertEquals("B", inserts[0].text)
+    }
+
+    @Test
+    fun testFormatPatchBasic() {
+        val old = "line1\nline2\nline3\n"
+        val new = "line1\nmodified\nline3\n"
+        val patch = formatPatch("file.txt", "file.txt", old, new)
+        assertTrue(patch.contains("--- a/file.txt"))
+        assertTrue(patch.contains("+++ b/file.txt"))
+        assertTrue(patch.contains("@@"))
+        assertTrue(patch.contains("-line2"))
+        assertTrue(patch.contains("+modified"))
+    }
+
+    @Test
+    fun testFormatPatchNoChanges() {
+        val text = "same\n"
+        val patch = formatPatch("f.txt", "f.txt", text, text)
+        assertTrue(patch.isEmpty())
+    }
+
+    @Test
+    fun testFormatPatchAddedFile() {
+        val patch = formatPatch("new.txt", "new.txt", "", "hello\nworld\n")
+        assertTrue(patch.contains("+hello"))
+        assertTrue(patch.contains("+world"))
+    }
+
+    @Test
+    fun testFormatPatchDeletedFile() {
+        val patch = formatPatch("old.txt", "old.txt", "goodbye\nworld\n", "")
+        assertTrue(patch.contains("-goodbye"))
+        assertTrue(patch.contains("-world"))
+    }
+
+    @Test
+    fun testDiffStatBasic() {
+        val stat = diffStat("file.txt", "a\nb\nc\n", "a\nB\nc\nd\n")
+        assertEquals("file.txt", stat.path)
+        assertEquals(1, stat.deletions)
+        assertEquals(2, stat.insertions)
+    }
+
+    @Test
+    fun testFormatStatOutput() {
+        val stats = listOf(
+            DiffStatEntry("file.txt", 3, 1),
+            DiffStatEntry("other.rs", 0, 5),
+        )
+        val output = formatStat(stats)
+        assertTrue(output.contains("file.txt"))
+        assertTrue(output.contains("other.rs"))
+        assertTrue(output.contains("2 files changed"))
+        assertTrue(output.contains("3 insertions(+)"))
+        assertTrue(output.contains("6 deletions(-)"))
+    }
+
+    @Test
+    fun testFormatStatEmpty() {
+        val output = formatStat(emptyList())
+        assertTrue(output.isEmpty())
+    }
+
     // Pack Index Tests
 
     private fun sortedTestOids(): Triple<List<OID>, IntArray, LongArray> {
