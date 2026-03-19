@@ -1709,6 +1709,115 @@ class MuonGitTest {
         }
     }
 
+    // Remote Tests
+
+    @Test
+    fun testAddAndGetRemote() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_remote_add_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            val remote = addRemote(repo.gitDir, "origin", "https://example.com/repo.git")
+
+            assertEquals("origin", remote.name)
+            assertEquals("https://example.com/repo.git", remote.url)
+            assertEquals(1, remote.fetchRefspecs.size)
+            assertEquals("+refs/heads/*:refs/remotes/origin/*", remote.fetchRefspecs[0])
+
+            val loaded = getRemote(repo.gitDir, "origin")
+            assertEquals("https://example.com/repo.git", loaded.url)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testListRemotes() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_remote_list_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            addRemote(repo.gitDir, "origin", "https://example.com/repo.git")
+            addRemote(repo.gitDir, "upstream", "https://example.com/upstream.git")
+
+            val names = listRemotes(repo.gitDir)
+            assertTrue(names.contains("origin"))
+            assertTrue(names.contains("upstream"))
+            assertEquals(2, names.size)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testRemoveRemote() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_remote_rm_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            addRemote(repo.gitDir, "origin", "https://example.com/repo.git")
+            removeRemote(repo.gitDir, "origin")
+
+            assertFailsWith<MuonGitException.NotFound> { getRemote(repo.gitDir, "origin") }
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testRenameRemote() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_remote_rename_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            addRemote(repo.gitDir, "origin", "https://example.com/repo.git")
+            renameRemote(repo.gitDir, "origin", "upstream")
+
+            assertFailsWith<MuonGitException.NotFound> { getRemote(repo.gitDir, "origin") }
+            val remote = getRemote(repo.gitDir, "upstream")
+            assertEquals("https://example.com/repo.git", remote.url)
+            assertEquals("+refs/heads/*:refs/remotes/upstream/*", remote.fetchRefspecs[0])
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testAddDuplicateRemote() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_remote_dup_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            addRemote(repo.gitDir, "origin", "https://example.com/repo.git")
+            assertFailsWith<MuonGitException.InvalidSpec> {
+                addRemote(repo.gitDir, "origin", "https://other.com/repo.git")
+            }
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testParseRefspec() {
+        val r1 = parseRefspec("+refs/heads/*:refs/remotes/origin/*")!!
+        assertTrue(r1.first)
+        assertEquals("refs/heads/*", r1.second)
+        assertEquals("refs/remotes/origin/*", r1.third)
+
+        val r2 = parseRefspec("refs/heads/main:refs/heads/main")!!
+        assertFalse(r2.first)
+        assertEquals("refs/heads/main", r2.second)
+        assertEquals("refs/heads/main", r2.third)
+
+        assertNull(parseRefspec("no-colon"))
+    }
+
+    @Test
+    fun testGetNonexistentRemote() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_remote_noexist_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            assertFailsWith<MuonGitException.NotFound> { getRemote(repo.gitDir, "nope") }
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
     // Pack Index Tests
 
     private fun sortedTestOids(): Triple<List<OID>, IntArray, LongArray> {

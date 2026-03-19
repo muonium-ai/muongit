@@ -51,7 +51,7 @@
 
 ## Phase 6: Network
 - [x] Config file read/write
-- [ ] Remote management
+- [x] Remote management
 - [ ] Smart protocol (pack negotiation)
 - [ ] HTTP/HTTPS transport
 - [ ] SSH transport

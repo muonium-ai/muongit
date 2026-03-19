@@ -20,6 +20,7 @@ pub mod diff;
 pub mod status;
 pub mod ignore;
 pub mod merge_base;
+pub mod remote;
 pub mod pack_index;
 pub mod pack;
 

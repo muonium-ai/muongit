@@ -1514,6 +1514,100 @@ final class MuonGitTests: XCTestCase {
         XCTAssertEqual(bases[0], a)
     }
 
+    // MARK: - Remote Tests
+
+    func testAddAndGetRemote() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_remote_add"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let remote = try addRemote(gitDir: repo.gitDir, name: "origin", url: "https://example.com/repo.git")
+
+        XCTAssertEqual(remote.name, "origin")
+        XCTAssertEqual(remote.url, "https://example.com/repo.git")
+        XCTAssertEqual(remote.fetchRefspecs.count, 1)
+        XCTAssertEqual(remote.fetchRefspecs[0], "+refs/heads/*:refs/remotes/origin/*")
+
+        let loaded = try getRemote(gitDir: repo.gitDir, name: "origin")
+        XCTAssertEqual(loaded.url, "https://example.com/repo.git")
+    }
+
+    func testListRemotes() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_remote_list"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        try addRemote(gitDir: repo.gitDir, name: "origin", url: "https://example.com/repo.git")
+        try addRemote(gitDir: repo.gitDir, name: "upstream", url: "https://example.com/upstream.git")
+
+        let names = try listRemotes(gitDir: repo.gitDir)
+        XCTAssertTrue(names.contains("origin"))
+        XCTAssertTrue(names.contains("upstream"))
+        XCTAssertEqual(names.count, 2)
+    }
+
+    func testRemoveRemote() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_remote_rm"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        try addRemote(gitDir: repo.gitDir, name: "origin", url: "https://example.com/repo.git")
+        try removeRemote(gitDir: repo.gitDir, name: "origin")
+
+        XCTAssertThrowsError(try getRemote(gitDir: repo.gitDir, name: "origin"))
+    }
+
+    func testRenameRemote() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_remote_rename"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        try addRemote(gitDir: repo.gitDir, name: "origin", url: "https://example.com/repo.git")
+        try renameRemote(gitDir: repo.gitDir, oldName: "origin", newName: "upstream")
+
+        XCTAssertThrowsError(try getRemote(gitDir: repo.gitDir, name: "origin"))
+        let remote = try getRemote(gitDir: repo.gitDir, name: "upstream")
+        XCTAssertEqual(remote.url, "https://example.com/repo.git")
+        XCTAssertEqual(remote.fetchRefspecs[0], "+refs/heads/*:refs/remotes/upstream/*")
+    }
+
+    func testAddDuplicateRemote() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_remote_dup"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        try addRemote(gitDir: repo.gitDir, name: "origin", url: "https://example.com/repo.git")
+        XCTAssertThrowsError(try addRemote(gitDir: repo.gitDir, name: "origin", url: "https://other.com/repo.git"))
+    }
+
+    func testParseRefspec() {
+        let result1 = parseRefspec("+refs/heads/*:refs/remotes/origin/*")!
+        XCTAssertTrue(result1.force)
+        XCTAssertEqual(result1.src, "refs/heads/*")
+        XCTAssertEqual(result1.dst, "refs/remotes/origin/*")
+
+        let result2 = parseRefspec("refs/heads/main:refs/heads/main")!
+        XCTAssertFalse(result2.force)
+        XCTAssertEqual(result2.src, "refs/heads/main")
+        XCTAssertEqual(result2.dst, "refs/heads/main")
+
+        XCTAssertNil(parseRefspec("no-colon"))
+    }
+
+    func testGetNonexistentRemote() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_remote_noexist"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        XCTAssertThrowsError(try getRemote(gitDir: repo.gitDir, name: "nope"))
+    }
+
     // MARK: - Pack Index Tests
 
     private func sortedTestOids() -> ([OID], [UInt32], [UInt64]) {
