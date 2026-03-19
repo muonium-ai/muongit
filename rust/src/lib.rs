@@ -29,6 +29,11 @@ pub mod transport;
 pub mod fetch;
 pub mod attributes;
 pub mod submodule;
+pub mod describe;
+pub mod notes;
+pub mod grafts;
+pub mod mailmap;
+pub mod pathspec;
 
 pub use oid::OID;
 pub use types::{ObjectType, Signature};

@@ -3113,6 +3113,238 @@ final class MuonGitTests: XCTestCase {
         XCTAssertTrue(refContent.contains("ae90f12eea699729ed24555e40b9fd669da12a12"))
     }
 
+    // ── Describe Tests ──
+
+    func testDescribeExactMatch() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_describe_exact"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp)
+        let gitDir = repo.gitDir
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1000000000, offset: 0)
+
+        let treeOid = try writeLooseObject(gitDir: gitDir, type: .tree, data: Data())
+        let commitData = serializeCommit(treeId: treeOid, parentIds: [], author: sig, committer: sig, message: "initial")
+        let c1 = try writeLooseObject(gitDir: gitDir, type: .commit, data: commitData)
+
+        let tagData = serializeTag(targetId: c1, targetType: .commit, tagName: "v1.0", tagger: sig, message: "Tag v1.0")
+        let tagOid = try writeLooseObject(gitDir: gitDir, type: .tag, data: tagData)
+        try writeReference(gitDir: gitDir, name: "refs/tags/v1.0", oid: tagOid)
+
+        let result = try describe(gitDir: gitDir, commitOid: c1)
+        XCTAssertTrue(result.exactMatch)
+        XCTAssertEqual(result.tagName, "v1.0")
+        XCTAssertEqual(result.depth, 0)
+    }
+
+    func testDescribeWithDepth() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_describe_depth"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp)
+        let gitDir = repo.gitDir
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1000000000, offset: 0)
+
+        let treeOid = try writeLooseObject(gitDir: gitDir, type: .tree, data: Data())
+        let c1Data = serializeCommit(treeId: treeOid, parentIds: [], author: sig, committer: sig, message: "first")
+        let c1 = try writeLooseObject(gitDir: gitDir, type: .commit, data: c1Data)
+        let c2Data = serializeCommit(treeId: treeOid, parentIds: [c1], author: sig, committer: sig, message: "second")
+        let c2 = try writeLooseObject(gitDir: gitDir, type: .commit, data: c2Data)
+        let c3Data = serializeCommit(treeId: treeOid, parentIds: [c2], author: sig, committer: sig, message: "third")
+        let c3 = try writeLooseObject(gitDir: gitDir, type: .commit, data: c3Data)
+
+        let tagData = serializeTag(targetId: c1, targetType: .commit, tagName: "v1.0", tagger: sig, message: "Tag v1.0")
+        let tagOid = try writeLooseObject(gitDir: gitDir, type: .tag, data: tagData)
+        try writeReference(gitDir: gitDir, name: "refs/tags/v1.0", oid: tagOid)
+
+        let result = try describe(gitDir: gitDir, commitOid: c3)
+        XCTAssertEqual(result.tagName, "v1.0")
+        XCTAssertEqual(result.depth, 2)
+        XCTAssertFalse(result.exactMatch)
+    }
+
+    func testDescribeFormat() {
+        let oid = OID(hex: "abcdef1234567890abcdef1234567890abcdef12")
+        let result = DescribeResult(tagName: "v1.0", depth: 3, commitId: oid, exactMatch: false, fallbackToId: false)
+        XCTAssertEqual(result.format(), "v1.0-3-gabcdef1")
+
+        let exact = DescribeResult(tagName: "v2.0", depth: 0, commitId: oid, exactMatch: true, fallbackToId: false)
+        XCTAssertEqual(exact.format(), "v2.0")
+    }
+
+    // ── Notes Tests ──
+
+    func testNoteRead() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_notes_read"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp)
+        let gitDir = repo.gitDir
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1000000000, offset: 0)
+
+        // Create refs/notes dir
+        try FileManager.default.createDirectory(atPath: (gitDir as NSString).appendingPathComponent("refs/notes"),
+                                                  withIntermediateDirectories: true)
+
+        let treeOid = try writeLooseObject(gitDir: gitDir, type: .tree, data: Data())
+        let commitData = serializeCommit(treeId: treeOid, parentIds: [], author: sig, committer: sig, message: "target")
+        let targetOid = try writeLooseObject(gitDir: gitDir, type: .commit, data: commitData)
+
+        let noteBlob = try writeLooseObject(gitDir: gitDir, type: .blob, data: Data("This is a note".utf8))
+
+        let entries = [TreeEntry(mode: 0o100644, name: targetOid.hex, oid: noteBlob)]
+        let notesTreeData = serializeTree(entries: entries)
+        let notesTree = try writeLooseObject(gitDir: gitDir, type: .tree, data: notesTreeData)
+
+        let notesCommitData = serializeCommit(treeId: notesTree, parentIds: [], author: sig, committer: sig, message: "Notes")
+        let notesCommit = try writeLooseObject(gitDir: gitDir, type: .commit, data: notesCommitData)
+        try writeReference(gitDir: gitDir, name: defaultNotesRef, oid: notesCommit)
+
+        let note = try noteRead(gitDir: gitDir, targetOid: targetOid)
+        XCTAssertEqual(note.message, "This is a note")
+        XCTAssertEqual(note.annotatedOid, targetOid)
+    }
+
+    func testNoteList() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_notes_list"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp)
+        let gitDir = repo.gitDir
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1000000000, offset: 0)
+
+        try FileManager.default.createDirectory(atPath: (gitDir as NSString).appendingPathComponent("refs/notes"),
+                                                  withIntermediateDirectories: true)
+
+        let treeOid = try writeLooseObject(gitDir: gitDir, type: .tree, data: Data())
+        let c1Data = serializeCommit(treeId: treeOid, parentIds: [], author: sig, committer: sig, message: "c1")
+        let c1 = try writeLooseObject(gitDir: gitDir, type: .commit, data: c1Data)
+        let c2Data = serializeCommit(treeId: treeOid, parentIds: [c1], author: sig, committer: sig, message: "c2")
+        let c2 = try writeLooseObject(gitDir: gitDir, type: .commit, data: c2Data)
+
+        let n1 = try writeLooseObject(gitDir: gitDir, type: .blob, data: Data("note1".utf8))
+        let n2 = try writeLooseObject(gitDir: gitDir, type: .blob, data: Data("note2".utf8))
+
+        let entries = [
+            TreeEntry(mode: 0o100644, name: c1.hex, oid: n1),
+            TreeEntry(mode: 0o100644, name: c2.hex, oid: n2),
+        ]
+        let notesTreeData = serializeTree(entries: entries)
+        let notesTree = try writeLooseObject(gitDir: gitDir, type: .tree, data: notesTreeData)
+        let notesCommitData = serializeCommit(treeId: notesTree, parentIds: [], author: sig, committer: sig, message: "Notes")
+        let notesCommit = try writeLooseObject(gitDir: gitDir, type: .commit, data: notesCommitData)
+        try writeReference(gitDir: gitDir, name: defaultNotesRef, oid: notesCommit)
+
+        let notes = try noteList(gitDir: gitDir)
+        XCTAssertEqual(notes.count, 2)
+    }
+
+    // ── Grafts Tests ──
+
+    func testGraftsParse() throws {
+        var grafts = Grafts()
+        try grafts.parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb cccccccccccccccccccccccccccccccccccccccc\ndddddddddddddddddddddddddddddddddddddddd\n")
+        XCTAssertEqual(grafts.count, 2)
+
+        let oidA = OID(hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        let graftA = grafts.get(oidA)!
+        XCTAssertEqual(graftA.parents.count, 2)
+
+        let oidD = OID(hex: "dddddddddddddddddddddddddddddddddddddddd")
+        let graftD = grafts.get(oidD)!
+        XCTAssertEqual(graftD.parents.count, 0)
+    }
+
+    func testGraftsAddRemove() {
+        var grafts = Grafts()
+        let oid = OID(hex: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        let parent = OID(hex: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        grafts.add(Graft(oid: oid, parents: [parent]))
+        XCTAssertTrue(grafts.contains(oid))
+        XCTAssertEqual(grafts.getParents(oid)?.count, 1)
+        XCTAssertTrue(grafts.remove(oid))
+        XCTAssertFalse(grafts.contains(oid))
+    }
+
+    func testGraftsLoadFile() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_swift_test_grafts_load"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp)
+        let gitDir = repo.gitDir
+        let graftsDir = (gitDir as NSString).appendingPathComponent("info")
+        try FileManager.default.createDirectory(atPath: graftsDir, withIntermediateDirectories: true)
+        let graftsPath = (graftsDir as NSString).appendingPathComponent("grafts")
+        try "# comment\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+            .write(toFile: graftsPath, atomically: true, encoding: .utf8)
+
+        let grafts = try Grafts.loadForRepo(gitDir: gitDir)
+        XCTAssertEqual(grafts.count, 1)
+    }
+
+    // ── Mailmap Tests ──
+
+    func testMailmapEmailOnly() {
+        var mm = Mailmap()
+        mm.parse("<real@example.com> <old@example.com>\n")
+        XCTAssertEqual(mm.count, 1)
+        let (name, email) = mm.resolve(name: "Someone", email: "old@example.com")
+        XCTAssertEqual(email, "real@example.com")
+        XCTAssertEqual(name, "Someone")
+    }
+
+    func testMailmapNameAndEmail() {
+        var mm = Mailmap()
+        mm.parse("Real Name <real@example.com> <old@example.com>\n")
+        let (name, email) = mm.resolve(name: "Old", email: "old@example.com")
+        XCTAssertEqual(name, "Real Name")
+        XCTAssertEqual(email, "real@example.com")
+    }
+
+    func testMailmapResolveSignature() {
+        var mm = Mailmap()
+        mm.parse("Proper Name <proper@example.com> <typo@example.com>\n")
+        let sig = Signature(name: "Wrong", email: "typo@example.com", time: 1000000000, offset: 0)
+        let resolved = mm.resolveSignature(sig)
+        XCTAssertEqual(resolved.name, "Proper Name")
+        XCTAssertEqual(resolved.email, "proper@example.com")
+    }
+
+    // ── Pathspec Tests ──
+
+    func testPathspecBasicMatching() {
+        let ps = Pathspec(patterns: ["*.rs"])
+        XCTAssertTrue(ps.matchesPath("src/main.rs"))
+        XCTAssertFalse(ps.matchesPath("src/main.py"))
+    }
+
+    func testPathspecDirectoryPrefix() {
+        let ps = Pathspec(patterns: ["src"])
+        XCTAssertTrue(ps.matchesPath("src"))
+        XCTAssertTrue(ps.matchesPath("src/main.rs"))
+        XCTAssertFalse(ps.matchesPath("test/main.rs"))
+    }
+
+    func testPathspecNegation() {
+        let ps = Pathspec(patterns: ["*.rs", "!test_*.rs"])
+        XCTAssertTrue(ps.matchesPath("main.rs"))
+        XCTAssertFalse(ps.matchesPath("test_main.rs"))
+    }
+
+    func testPathspecDoubleStar() {
+        let ps = Pathspec(patterns: ["**/test.rs"])
+        XCTAssertTrue(ps.matchesPath("test.rs"))
+        XCTAssertTrue(ps.matchesPath("src/test.rs"))
+        XCTAssertTrue(ps.matchesPath("a/b/c/test.rs"))
+        XCTAssertFalse(ps.matchesPath("test.py"))
+    }
+
+    func testPathspecMatchPaths() {
+        let ps = Pathspec(patterns: ["*.rs", "*.toml"])
+        let result = ps.matchPaths(["src/main.rs", "Cargo.toml", "README.md", "src/lib.rs"])
+        XCTAssertEqual(result.matches.count, 3)
+    }
+
     // ── Performance Tests ──
 
     private func measureMs(_ block: () -> Void) -> Double {

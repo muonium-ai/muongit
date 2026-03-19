@@ -3464,6 +3464,269 @@ class MuonGitTest {
     }
 
     // ============================================================
+    // Describe Tests
+    // ============================================================
+
+    @Test
+    fun testDescribeExactMatch() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_describe_exact")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val sig = Signature(name = "Test", email = "test@test.com", time = 1000000000, offset = 0)
+
+            val treeOid = writeLooseObject(repo.gitDir, ObjectType.TREE, byteArrayOf())
+            val commitData = serializeCommit(treeOid, emptyList(), sig, sig, "initial")
+            val c1 = writeLooseObject(repo.gitDir, ObjectType.COMMIT, commitData)
+
+            val tagData = serializeTag(c1, ObjectType.COMMIT, "v1.0", sig, "Tag v1.0")
+            val tagOid = writeLooseObject(repo.gitDir, ObjectType.TAG, tagData)
+            writeReference(repo.gitDir, "refs/tags/v1.0", tagOid)
+
+            val result = describe(repo.gitDir, c1)
+            assertTrue(result.exactMatch)
+            assertEquals("v1.0", result.tagName)
+            assertEquals(0, result.depth)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testDescribeWithDepth() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_describe_depth")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val sig = Signature(name = "Test", email = "test@test.com", time = 1000000000, offset = 0)
+
+            val treeOid = writeLooseObject(repo.gitDir, ObjectType.TREE, byteArrayOf())
+            val c1Data = serializeCommit(treeOid, emptyList(), sig, sig, "first")
+            val c1 = writeLooseObject(repo.gitDir, ObjectType.COMMIT, c1Data)
+            val c2Data = serializeCommit(treeOid, listOf(c1), sig, sig, "second")
+            val c2 = writeLooseObject(repo.gitDir, ObjectType.COMMIT, c2Data)
+            val c3Data = serializeCommit(treeOid, listOf(c2), sig, sig, "third")
+            val c3 = writeLooseObject(repo.gitDir, ObjectType.COMMIT, c3Data)
+
+            val tagData = serializeTag(c1, ObjectType.COMMIT, "v1.0", sig, "Tag v1.0")
+            val tagOid = writeLooseObject(repo.gitDir, ObjectType.TAG, tagData)
+            writeReference(repo.gitDir, "refs/tags/v1.0", tagOid)
+
+            val result = describe(repo.gitDir, c3)
+            assertEquals("v1.0", result.tagName)
+            assertEquals(2, result.depth)
+            assertFalse(result.exactMatch)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testDescribeFormat() {
+        val oid = OID("abcdef1234567890abcdef1234567890abcdef12")
+        val result = DescribeResult(tagName = "v1.0", depth = 3, commitId = oid, exactMatch = false, fallbackToId = false)
+        assertEquals("v1.0-3-gabcdef1", result.format())
+
+        val exact = DescribeResult(tagName = "v2.0", depth = 0, commitId = oid, exactMatch = true, fallbackToId = false)
+        assertEquals("v2.0", exact.format())
+    }
+
+    // ============================================================
+    // Notes Tests
+    // ============================================================
+
+    @Test
+    fun testNoteRead() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_notes_read")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val sig = Signature(name = "Test", email = "test@test.com", time = 1000000000, offset = 0)
+
+            java.io.File(repo.gitDir, "refs/notes").mkdirs()
+
+            val treeOid = writeLooseObject(repo.gitDir, ObjectType.TREE, byteArrayOf())
+            val commitData = serializeCommit(treeOid, emptyList(), sig, sig, "target")
+            val targetOid = writeLooseObject(repo.gitDir, ObjectType.COMMIT, commitData)
+
+            val noteBlob = writeLooseObject(repo.gitDir, ObjectType.BLOB, "This is a note".toByteArray())
+
+            val entries = listOf(TreeEntry(mode = FileMode.BLOB, name = targetOid.hex, oid = noteBlob))
+            val notesTreeData = serializeTree(entries)
+            val notesTree = writeLooseObject(repo.gitDir, ObjectType.TREE, notesTreeData)
+
+            val notesCommitData = serializeCommit(notesTree, emptyList(), sig, sig, "Notes")
+            val notesCommit = writeLooseObject(repo.gitDir, ObjectType.COMMIT, notesCommitData)
+            writeReference(repo.gitDir, DEFAULT_NOTES_REF, notesCommit)
+
+            val note = noteRead(repo.gitDir, targetOid)
+            assertEquals("This is a note", note.message)
+            assertEquals(targetOid, note.annotatedOid)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testNoteList() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_notes_list")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val sig = Signature(name = "Test", email = "test@test.com", time = 1000000000, offset = 0)
+
+            java.io.File(repo.gitDir, "refs/notes").mkdirs()
+
+            val treeOid = writeLooseObject(repo.gitDir, ObjectType.TREE, byteArrayOf())
+            val c1Data = serializeCommit(treeOid, emptyList(), sig, sig, "c1")
+            val c1 = writeLooseObject(repo.gitDir, ObjectType.COMMIT, c1Data)
+            val c2Data = serializeCommit(treeOid, listOf(c1), sig, sig, "c2")
+            val c2 = writeLooseObject(repo.gitDir, ObjectType.COMMIT, c2Data)
+
+            val n1 = writeLooseObject(repo.gitDir, ObjectType.BLOB, "note1".toByteArray())
+            val n2 = writeLooseObject(repo.gitDir, ObjectType.BLOB, "note2".toByteArray())
+
+            val entries = listOf(
+                TreeEntry(mode = FileMode.BLOB, name = c1.hex, oid = n1),
+                TreeEntry(mode = FileMode.BLOB, name = c2.hex, oid = n2)
+            )
+            val notesTreeData = serializeTree(entries)
+            val notesTree = writeLooseObject(repo.gitDir, ObjectType.TREE, notesTreeData)
+            val notesCommitData = serializeCommit(notesTree, emptyList(), sig, sig, "Notes")
+            val notesCommit = writeLooseObject(repo.gitDir, ObjectType.COMMIT, notesCommitData)
+            writeReference(repo.gitDir, DEFAULT_NOTES_REF, notesCommit)
+
+            val notes = noteList(repo.gitDir)
+            assertEquals(2, notes.size)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    // ============================================================
+    // Grafts Tests
+    // ============================================================
+
+    @Test
+    fun testGraftsParse() {
+        val grafts = Grafts()
+        grafts.parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb cccccccccccccccccccccccccccccccccccccccc\ndddddddddddddddddddddddddddddddddddddddd\n")
+        assertEquals(2, grafts.count)
+
+        val oidA = OID("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        val graftA = grafts.get(oidA)!!
+        assertEquals(2, graftA.parents.size)
+
+        val oidD = OID("dddddddddddddddddddddddddddddddddddddddd")
+        val graftD = grafts.get(oidD)!!
+        assertEquals(0, graftD.parents.size)
+    }
+
+    @Test
+    fun testGraftsAddRemove() {
+        val grafts = Grafts()
+        val oid = OID("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        val parent = OID("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        grafts.add(Graft(oid = oid, parents = listOf(parent)))
+        assertTrue(grafts.contains(oid))
+        assertEquals(1, grafts.getParents(oid)?.size)
+        assertTrue(grafts.remove(oid))
+        assertFalse(grafts.contains(oid))
+    }
+
+    @Test
+    fun testGraftsLoadFile() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_grafts_load")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val graftsDir = java.io.File(repo.gitDir, "info")
+            graftsDir.mkdirs()
+            java.io.File(graftsDir, "grafts").writeText("# comment\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n")
+
+            val grafts = Grafts.loadForRepo(repo.gitDir)
+            assertEquals(1, grafts.count)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    // ============================================================
+    // Mailmap Tests
+    // ============================================================
+
+    @Test
+    fun testMailmapEmailOnly() {
+        val mm = Mailmap()
+        mm.parse("<real@example.com> <old@example.com>\n")
+        assertEquals(1, mm.count)
+        val (name, email) = mm.resolve("Someone", "old@example.com")
+        assertEquals("real@example.com", email)
+        assertEquals("Someone", name)
+    }
+
+    @Test
+    fun testMailmapNameAndEmail() {
+        val mm = Mailmap()
+        mm.parse("Real Name <real@example.com> <old@example.com>\n")
+        val (name, email) = mm.resolve("Old", "old@example.com")
+        assertEquals("Real Name", name)
+        assertEquals("real@example.com", email)
+    }
+
+    @Test
+    fun testMailmapResolveSignature() {
+        val mm = Mailmap()
+        mm.parse("Proper Name <proper@example.com> <typo@example.com>\n")
+        val sig = Signature(name = "Wrong", email = "typo@example.com", time = 1000000000, offset = 0)
+        val resolved = mm.resolveSignature(sig)
+        assertEquals("Proper Name", resolved.name)
+        assertEquals("proper@example.com", resolved.email)
+    }
+
+    // ============================================================
+    // Pathspec Tests
+    // ============================================================
+
+    @Test
+    fun testPathspecBasicMatching() {
+        val ps = Pathspec(listOf("*.rs"))
+        assertTrue(ps.matchesPath("src/main.rs"))
+        assertFalse(ps.matchesPath("src/main.py"))
+    }
+
+    @Test
+    fun testPathspecDirectoryPrefix() {
+        val ps = Pathspec(listOf("src"))
+        assertTrue(ps.matchesPath("src"))
+        assertTrue(ps.matchesPath("src/main.rs"))
+        assertFalse(ps.matchesPath("test/main.rs"))
+    }
+
+    @Test
+    fun testPathspecNegation() {
+        val ps = Pathspec(listOf("*.rs", "!test_*.rs"))
+        assertTrue(ps.matchesPath("main.rs"))
+        assertFalse(ps.matchesPath("test_main.rs"))
+    }
+
+    @Test
+    fun testPathspecDoubleStar() {
+        val ps = Pathspec(listOf("**/test.rs"))
+        assertTrue(ps.matchesPath("test.rs"))
+        assertTrue(ps.matchesPath("src/test.rs"))
+        assertTrue(ps.matchesPath("a/b/c/test.rs"))
+        assertFalse(ps.matchesPath("test.py"))
+    }
+
+    @Test
+    fun testPathspecMatchPaths() {
+        val ps = Pathspec(listOf("*.rs", "*.toml"))
+        val result = ps.matchPaths(listOf("src/main.rs", "Cargo.toml", "README.md", "src/lib.rs"))
+        assertEquals(3, result.matches.size)
+    }
+
+    // ============================================================
     // Performance tests
     // ============================================================
 
