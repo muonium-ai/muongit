@@ -1709,6 +1709,141 @@ class MuonGitTest {
         }
     }
 
+    // Checkout Tests
+
+    private fun addBlobToIndex(gitDir: java.io.File, index: Index, path: String, content: ByteArray, executable: Boolean) {
+        val oid = writeLooseObject(gitDir, ObjectType.BLOB, content)
+        val mode = if (executable) 0b001000000_111_101_101 else 0b001000000_110_100_100 // 0o100755 / 0o100644
+        index.entries.add(IndexEntry(
+            mode = mode, oid = oid, fileSize = content.size,
+            flags = minOf(path.length, 0xFFF), path = path
+        ))
+        index.entries.sortBy { it.path }
+    }
+
+    @Test
+    fun testCheckoutBasic() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_checkout_basic_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            val workdir = repo.workdir!!
+            val index = Index()
+            addBlobToIndex(repo.gitDir, index, "hello.txt", "Hello, world!\n".toByteArray(), false)
+            addBlobToIndex(repo.gitDir, index, "src/main.rs", "fn main() {}\n".toByteArray(), false)
+            writeIndex(repo.gitDir, index)
+
+            val result = checkoutIndex(repo.gitDir, workdir, CheckoutOptions(force = true))
+            assertEquals(2, result.updated.size)
+            assertTrue(result.conflicts.isEmpty())
+            assertEquals("Hello, world!\n", java.io.File(workdir, "hello.txt").readText())
+            assertEquals("fn main() {}\n", java.io.File(workdir, "src/main.rs").readText())
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testCheckoutCreatesDirectories() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_checkout_dirs_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            val workdir = repo.workdir!!
+            val index = Index()
+            addBlobToIndex(repo.gitDir, index, "a/b/c/deep.txt", "deep content".toByteArray(), false)
+            writeIndex(repo.gitDir, index)
+
+            val result = checkoutIndex(repo.gitDir, workdir, CheckoutOptions(force = true))
+            assertEquals(1, result.updated.size)
+            assertTrue(java.io.File(workdir, "a/b/c/deep.txt").exists())
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testCheckoutConflictDetection() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_checkout_conflict_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            val workdir = repo.workdir!!
+
+            java.io.File(workdir, "existing.txt").writeText("local changes")
+
+            val index = Index()
+            addBlobToIndex(repo.gitDir, index, "existing.txt", "index content".toByteArray(), false)
+            writeIndex(repo.gitDir, index)
+
+            // Without force
+            val r1 = checkoutIndex(repo.gitDir, workdir, CheckoutOptions(force = false))
+            assertTrue(r1.updated.isEmpty())
+            assertEquals(1, r1.conflicts.size)
+            assertEquals("local changes", java.io.File(workdir, "existing.txt").readText())
+
+            // With force
+            val r2 = checkoutIndex(repo.gitDir, workdir, CheckoutOptions(force = true))
+            assertEquals(1, r2.updated.size)
+            assertEquals("index content", java.io.File(workdir, "existing.txt").readText())
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testCheckoutExecutableMode() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_checkout_exec_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            val workdir = repo.workdir!!
+            val index = Index()
+            addBlobToIndex(repo.gitDir, index, "script.sh", "#!/bin/sh\necho hi\n".toByteArray(), true)
+            writeIndex(repo.gitDir, index)
+
+            checkoutIndex(repo.gitDir, workdir, CheckoutOptions(force = true))
+            assertTrue(java.io.File(workdir, "script.sh").canExecute(), "file should be executable")
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testCheckoutPaths() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_checkout_paths_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            val workdir = repo.workdir!!
+            val index = Index()
+            addBlobToIndex(repo.gitDir, index, "a.txt", "aaa".toByteArray(), false)
+            addBlobToIndex(repo.gitDir, index, "b.txt", "bbb".toByteArray(), false)
+            addBlobToIndex(repo.gitDir, index, "c.txt", "ccc".toByteArray(), false)
+            writeIndex(repo.gitDir, index)
+
+            val result = checkoutPaths(repo.gitDir, workdir, listOf("a.txt", "c.txt"), CheckoutOptions(force = true))
+            assertEquals(2, result.updated.size)
+            assertTrue(java.io.File(workdir, "a.txt").exists())
+            assertFalse(java.io.File(workdir, "b.txt").exists())
+            assertTrue(java.io.File(workdir, "c.txt").exists())
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testCheckoutPathNotInIndex() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "test_checkout_notfound_${System.nanoTime()}")
+        try {
+            val repo = Repository.init(tmp.absolutePath, bare = false)
+            val workdir = repo.workdir!!
+            val index = Index()
+            writeIndex(repo.gitDir, index)
+
+            assertFailsWith<MuonGitException.NotFound> {
+                checkoutPaths(repo.gitDir, workdir, listOf("nonexistent.txt"), CheckoutOptions(force = true))
+            }
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
     // Pack Index Tests
 
     private fun sortedTestOids(): Triple<List<OID>, IntArray, LongArray> {
