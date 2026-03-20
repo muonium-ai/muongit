@@ -34,6 +34,7 @@ pub mod cherrypick;
 pub mod revert;
 pub mod rebase;
 pub mod stash;
+pub mod worktree;
 
 pub use oid::OID;
 pub use types::{ObjectType, Signature};
