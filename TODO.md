@@ -69,4 +69,4 @@
 - [ ] Grafts
 - [ ] Mailmap
 - [ ] Pathspec
-- [ ] Filter system
+- [x] Filter system
