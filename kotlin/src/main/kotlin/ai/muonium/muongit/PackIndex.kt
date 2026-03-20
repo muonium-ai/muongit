@@ -47,7 +47,7 @@ data class PackIndex(
     override fun hashCode(): Int = count.hashCode()
 }
 
-private fun compareBytes(a: ByteArray, b: ByteArray): Int {
+internal fun compareBytes(a: ByteArray, b: ByteArray): Int {
     for (i in 0 until minOf(a.size, b.size)) {
         val av = a[i].toInt() and 0xFF
         val bv = b[i].toInt() and 0xFF
@@ -57,7 +57,7 @@ private fun compareBytes(a: ByteArray, b: ByteArray): Int {
     return a.size - b.size
 }
 
-private fun readPackU32(data: ByteArray, offset: Int): Int =
+internal fun readPackU32(data: ByteArray, offset: Int): Int =
     ((data[offset].toInt() and 0xFF) shl 24) or
     ((data[offset + 1].toInt() and 0xFF) shl 16) or
     ((data[offset + 2].toInt() and 0xFF) shl 8) or
@@ -126,6 +126,20 @@ fun parsePackIndex(data: ByteArray): PackIndex {
 
 /** Build a pack index from components (for testing). */
 internal fun buildPackIndex(oids: List<OID>, crcs: IntArray, offsets: LongArray): ByteArray {
+    return buildPackIndexWithChecksums(
+        oids = oids,
+        crcs = crcs,
+        offsets = offsets,
+        packChecksum = ByteArray(20)
+    )
+}
+
+internal fun buildPackIndexWithChecksums(
+    oids: List<OID>,
+    crcs: IntArray,
+    offsets: LongArray,
+    packChecksum: ByteArray,
+): ByteArray {
     val buf = java.io.ByteArrayOutputStream()
 
     buf.write(IDX_MAGIC)
@@ -151,12 +165,31 @@ internal fun buildPackIndex(oids: List<OID>, crcs: IntArray, offsets: LongArray)
         buf.write(writePackIdxU32(crc))
     }
 
+    val largeOffsets = mutableListOf<Long>()
     for (offset in offsets) {
-        buf.write(writePackIdxU32((offset and 0xFFFFFFFFL).toInt()))
+        if (offset > 0x7FFF_FFFFL) {
+            val idx = largeOffsets.size
+            buf.write(writePackIdxU32(0x80000000.toInt() or idx))
+            largeOffsets.add(offset)
+        } else {
+            buf.write(writePackIdxU32((offset and 0xFFFFFFFFL).toInt()))
+        }
     }
 
-    buf.write(ByteArray(20)) // pack checksum
-    buf.write(ByteArray(20)) // index checksum
+    for (offset in largeOffsets) {
+        val raw = ByteArray(8)
+        var value = offset
+        for (i in 7 downTo 0) {
+            raw[i] = (value and 0xFF).toByte()
+            value = value shr 8
+        }
+        buf.write(raw)
+    }
+
+    buf.write(packChecksum)
+
+    val checksum = SHA1.hash(buf.toByteArray())
+    buf.write(checksum)
 
     return buf.toByteArray()
 }

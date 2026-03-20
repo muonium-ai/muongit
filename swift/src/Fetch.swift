@@ -174,6 +174,40 @@ public func buildPushReport(_ updates: [PushUpdate]) -> String {
     return report
 }
 
+public struct FetchOptions {
+    public let refspecs: [String]?
+    public let transport: TransportOptions
+
+    public init(refspecs: [String]? = nil, transport: TransportOptions = TransportOptions()) {
+        self.refspecs = refspecs
+        self.transport = transport
+    }
+}
+
+public struct FetchResult {
+    public let advertisedRefs: [RemoteRef]
+    public let capabilities: ServerCapabilities
+    public let matchedRefs: [MatchedRef]
+    public let updatedRefs: Int
+    public let indexedPack: IndexedPack?
+}
+
+public struct PushOptions {
+    public let refspecs: [String]?
+    public let transport: TransportOptions
+
+    public init(refspecs: [String]? = nil, transport: TransportOptions = TransportOptions()) {
+        self.refspecs = refspecs
+        self.transport = transport
+    }
+}
+
+public struct PushResult {
+    public let advertisedRefs: [RemoteRef]
+    public let updatedTrackingRefs: Int
+    public let report: String
+}
+
 // MARK: - Clone
 
 /// Options for clone.
@@ -181,11 +215,18 @@ public struct CloneOptions {
     public let remoteName: String
     public let branch: String?
     public let bare: Bool
+    public let transport: TransportOptions
 
-    public init(remoteName: String = "origin", branch: String? = nil, bare: Bool = false) {
+    public init(
+        remoteName: String = "origin",
+        branch: String? = nil,
+        bare: Bool = false,
+        transport: TransportOptions = TransportOptions()
+    ) {
         self.remoteName = remoteName
         self.branch = branch
         self.bare = bare
+        self.transport = transport
     }
 }
 
@@ -223,4 +264,271 @@ public func defaultBranchFromCaps(_ caps: ServerCapabilities) -> String? {
         return String(target.dropFirst("refs/heads/".count))
     }
     return nil
+}
+
+public func cloneRepository(from url: String, to path: String, options: CloneOptions = CloneOptions()) throws -> Repository {
+    let repo = try cloneSetup(path: path, url: url, options: options)
+    let fetch = try fetchRemote(repository: repo, remoteName: options.remoteName, options: FetchOptions(transport: options.transport))
+    let (branch, headOID) = try resolveCloneHead(fetch, branch: options.branch)
+    try cloneFinish(gitDir: repo.gitDir, remoteName: options.remoteName, defaultBranch: branch, headOid: headOID)
+    if !options.bare {
+        _ = try reset(gitDir: repo.gitDir, workdir: repo.workdir, spec: "HEAD", mode: .hard)
+    }
+    return repo
+}
+
+public func fetchRemote(
+    repository: Repository,
+    remoteName: String,
+    options: FetchOptions = FetchOptions()
+) throws -> FetchResult {
+    let remote = try getRemote(gitDir: repository.gitDir, name: remoteName)
+    let advertisement = try advertiseUploadPack(url: remote.url, options: options.transport)
+    let refspecs = options.refspecs ?? remote.fetchRefspecs
+    let negotiation = computeFetchWants(remoteRefs: advertisement.refs, refspecs: refspecs, gitDir: repository.gitDir)
+
+    if negotiation.wants.isEmpty {
+        let updated = try updateRefsFromFetch(gitDir: repository.gitDir, matchedRefs: negotiation.matchedRefs)
+        return FetchResult(
+            advertisedRefs: advertisement.refs,
+            capabilities: advertisement.capabilities,
+            matchedRefs: negotiation.matchedRefs,
+            updatedRefs: updated,
+            indexedPack: nil
+        )
+    }
+
+    let request = buildWantHave(
+        wants: negotiation.wants,
+        haves: negotiation.haves,
+        caps: fetchCapabilities(advertisement.capabilities)
+    )
+    let response = try uploadPack(url: remote.url, request: request, options: options.transport)
+    let indexedPack = try extractPackFromFetchResponse(response)
+        .map { try indexPackToODB(gitDir: repository.gitDir, packBytes: Array($0)) }
+    let updated = try updateRefsFromFetch(gitDir: repository.gitDir, matchedRefs: negotiation.matchedRefs)
+
+    return FetchResult(
+        advertisedRefs: advertisement.refs,
+        capabilities: advertisement.capabilities,
+        matchedRefs: negotiation.matchedRefs,
+        updatedRefs: updated,
+        indexedPack: indexedPack
+    )
+}
+
+public func pushRemote(
+    repository: Repository,
+    remoteName: String,
+    options: PushOptions = PushOptions()
+) throws -> PushResult {
+    let remote = try getRemote(gitDir: repository.gitDir, name: remoteName)
+    let advertisement = try advertiseReceivePack(url: remote.url, options: options.transport)
+    let refspecs = try options.refspecs ?? defaultPushRefspecs(gitDir: repository.gitDir)
+    let updates = try computePushUpdates(pushRefspecs: refspecs, gitDir: repository.gitDir, remoteRefs: advertisement.refs)
+
+    for update in updates {
+        if update.force {
+            continue
+        }
+        if !(try isFastForward(gitDir: repository.gitDir, oldOID: update.dstOid, newOID: update.srcOid)) {
+            throw MuonGitError.notFastForward
+        }
+    }
+
+    let pack = try buildPackFromOIDs(
+        gitDir: repository.gitDir,
+        roots: updates.map { $0.srcOid },
+        exclude: advertisement.refs.map { $0.oid }
+    )
+    let request = buildPushRequest(updates: updates, pack: pack, capabilities: advertisement.capabilities)
+    let response = try receivePack(url: remote.url, request: Data(request), options: options.transport)
+    let report = try parsePushResponse(response)
+    let updatedTrackingRefs = try updateTrackingRefsAfterPush(gitDir: repository.gitDir, remoteName: remoteName, updates: updates)
+
+    return PushResult(
+        advertisedRefs: advertisement.refs,
+        updatedTrackingRefs: updatedTrackingRefs,
+        report: report
+    )
+}
+
+public extension Repository {
+    func fetch(remoteName: String, options: FetchOptions = FetchOptions()) throws -> FetchResult {
+        try fetchRemote(repository: self, remoteName: remoteName, options: options)
+    }
+
+    func push(remoteName: String, options: PushOptions = PushOptions()) throws -> PushResult {
+        try pushRemote(repository: self, remoteName: remoteName, options: options)
+    }
+}
+
+private func fetchCapabilities(_ caps: ServerCapabilities) -> [String] {
+    var requested: [String] = []
+    if caps.has("side-band-64k") {
+        requested.append("side-band-64k")
+    } else if caps.has("side-band") {
+        requested.append("side-band")
+    }
+    if caps.has("ofs-delta") {
+        requested.append("ofs-delta")
+    }
+    if caps.has("include-tag") {
+        requested.append("include-tag")
+    }
+    return requested
+}
+
+private func extractPackFromFetchResponse(_ response: Data) throws -> Data? {
+    let (lines, consumed) = try unwrap(pktLineDecode(response))
+    var pack = Data()
+
+    for line in lines {
+        guard case let .data(data) = line else { continue }
+        if data.starts(with: Data("ACK ".utf8)) || data == Data("NAK\n".utf8) {
+            continue
+        }
+        guard let first = data.first else { continue }
+        switch first {
+        case 1:
+            pack.append(data.dropFirst())
+        case 2:
+            break
+        case 3:
+            throw MuonGitError.invalid(String(decoding: data.dropFirst(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+        default:
+            break
+        }
+    }
+
+    if !pack.isEmpty {
+        return pack
+    }
+
+    if consumed < response.count {
+        let trailing = response.subdata(in: consumed..<response.count)
+        if trailing.starts(with: Data("PACK".utf8)) {
+            return trailing
+        }
+    }
+
+    return nil
+}
+
+private func buildPushRequest(updates: [PushUpdate], pack: [UInt8], capabilities: ServerCapabilities) -> [UInt8] {
+    var requestedCaps = ["report-status"]
+    if capabilities.has("ofs-delta") {
+        requestedCaps.append("ofs-delta")
+    }
+
+    var out = Data()
+    for (index, update) in updates.enumerated() {
+        let line: String
+        if index == 0 {
+            line = "\(update.dstOid.hex) \(update.srcOid.hex) \(update.dstRef)\u{0}\(requestedCaps.joined(separator: " "))\n"
+        } else {
+            line = "\(update.dstOid.hex) \(update.srcOid.hex) \(update.dstRef)\n"
+        }
+        out.append(pktLineEncode(Data(line.utf8)))
+    }
+    out.append(pktLineFlush())
+    out.append(Data(pack))
+    return Array(out)
+}
+
+private func parsePushResponse(_ response: Data) throws -> String {
+    let (lines, consumed) = try unwrap(pktLineDecode(response))
+    var text = ""
+
+    for line in lines {
+        guard case let .data(data) = line else { continue }
+        let payload: Data
+        if let first = data.first, first == 1 || first == 2 {
+            payload = data.dropFirst()
+        } else if let first = data.first, first == 3 {
+            throw MuonGitError.invalid(String(decoding: data.dropFirst(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+        } else {
+            payload = data
+        }
+        text += String(decoding: payload, as: UTF8.self)
+    }
+
+    if consumed < response.count {
+        text += String(decoding: response.subdata(in: consumed..<response.count), as: UTF8.self)
+    }
+
+    for line in text.split(separator: "\n").map(String.init) {
+        if line.hasPrefix("unpack "), line != "unpack ok" {
+            throw MuonGitError.invalid(line)
+        }
+        if line.hasPrefix("ng ") {
+            throw MuonGitError.invalid(String(line.dropFirst(3)))
+        }
+    }
+
+    return text
+}
+
+private func resolveCloneHead(_ fetch: FetchResult, branch: String?) throws -> (String, OID) {
+    if let branch {
+        let refName = "refs/heads/\(branch)"
+        guard let oid = fetch.advertisedRefs.first(where: { $0.name == refName })?.oid else {
+            throw MuonGitError.notFound("remote branch '\(branch)' not found")
+        }
+        return (branch, oid)
+    }
+
+    if let branch = defaultBranchFromCaps(fetch.capabilities) {
+        let refName = "refs/heads/\(branch)"
+        if let oid = fetch.advertisedRefs.first(where: { $0.name == refName })?.oid {
+            return (branch, oid)
+        }
+    }
+
+    if let headOID = fetch.advertisedRefs.first(where: { $0.name == "HEAD" })?.oid,
+       let branchRef = fetch.advertisedRefs.first(where: { $0.name.hasPrefix("refs/heads/") && $0.oid == headOID }) {
+        return (String(branchRef.name.dropFirst("refs/heads/".count)), headOID)
+    }
+
+    for candidate in ["main", "master"] {
+        let refName = "refs/heads/\(candidate)"
+        if let oid = fetch.advertisedRefs.first(where: { $0.name == refName })?.oid {
+            return (candidate, oid)
+        }
+    }
+
+    throw MuonGitError.notFound("could not determine remote default branch")
+}
+
+private func defaultPushRefspecs(gitDir: String) throws -> [String] {
+    let head = try readReference(gitDir: gitDir, name: "HEAD")
+    guard head.hasPrefix("ref: ") else {
+        throw MuonGitError.invalidSpec("HEAD is detached; provide push refspecs")
+    }
+    let target = String(head.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+    return ["\(target):\(target)"]
+}
+
+private func isFastForward(gitDir: String, oldOID: OID, newOID: OID) throws -> Bool {
+    if oldOID == .zero {
+        return true
+    }
+    return try mergeBase(gitDir: gitDir, oid1: oldOID, oid2: newOID) == oldOID
+}
+
+private func updateTrackingRefsAfterPush(gitDir: String, remoteName: String, updates: [PushUpdate]) throws -> Int {
+    var updated = 0
+    for update in updates where update.dstRef.hasPrefix("refs/heads/") {
+        let branch = update.dstRef.dropFirst("refs/heads/".count)
+        try writeReference(gitDir: gitDir, name: "refs/remotes/\(remoteName)/\(branch)", oid: update.srcOid)
+        updated += 1
+    }
+    return updated
+}
+
+private func unwrap<T>(_ result: Result<T, MuonGitError>) throws -> T {
+    switch result {
+    case let .success(value): return value
+    case let .failure(error): throw error
+    }
 }

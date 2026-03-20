@@ -96,8 +96,19 @@ impl Repository {
     }
 
     /// Clone a repository from a URL
-    pub fn clone(_url: &str, _path: impl Into<String>) -> Result<Self, MuonGitError> {
-        todo!("implement clone - requires network transport")
+    pub fn clone(url: &str, path: impl Into<String>) -> Result<Self, MuonGitError> {
+        let path = path.into();
+        crate::fetch::clone_repository(url, &path, &crate::fetch::CloneOptions::default())
+    }
+
+    /// Clone a repository from a URL using explicit clone options.
+    pub fn clone_with_options(
+        url: &str,
+        path: impl Into<String>,
+        opts: &crate::fetch::CloneOptions,
+    ) -> Result<Self, MuonGitError> {
+        let path = path.into();
+        crate::fetch::clone_repository(url, &path, opts)
     }
 
     /// Path to the .git directory

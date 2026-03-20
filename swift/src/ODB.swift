@@ -1,6 +1,7 @@
 /// Loose object read/write for the git object database
 /// Parity: libgit2 src/libgit2/odb_loose.c
 import Foundation
+import zlib
 
 // MARK: - Object Type String Helpers
 
@@ -47,9 +48,7 @@ public func readLooseObject(gitDir: String, oid: OID) throws -> (ObjectType, Dat
     }
 
     let compressedData = try Data(contentsOf: URL(fileURLWithPath: objectPath))
-
-    // Decompress using zlib via NSData
-    let decompressed = try (compressedData as NSData).decompressed(using: .zlib) as Data
+    let decompressed = try inflateLooseObjectData(compressedData)
 
     // Parse header: "{type} {size}\0{content}"
     guard let nullIndex = decompressed.firstIndex(of: 0) else {
@@ -79,6 +78,63 @@ public func readLooseObject(gitDir: String, oid: OID) throws -> (ObjectType, Dat
     }
 
     return (type, Data(content))
+}
+
+private func inflateLooseObjectData(_ compressed: Data) throws -> Data {
+    guard !compressed.isEmpty else {
+        throw MuonGitError.invalidObject("empty zlib stream")
+    }
+
+    var stream = z_stream()
+    let initStatus = inflateInit_(&stream, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size))
+    guard initStatus == Z_OK else {
+        throw MuonGitError.invalidObject("failed to initialize zlib stream")
+    }
+    defer { inflateEnd(&stream) }
+
+    var output = Data()
+    var outBuffer = [UInt8](repeating: 0, count: 32 * 1024)
+    var input = compressed
+    var status = Int32(Z_OK)
+    let inputCount = input.count
+
+    try input.withUnsafeMutableBytes { inputRawBuffer in
+        guard let srcBase = inputRawBuffer.baseAddress?.assumingMemoryBound(to: Bytef.self) else {
+            throw MuonGitError.invalidObject("empty zlib stream")
+        }
+
+        stream.next_in = srcBase
+        stream.avail_in = uInt(inputCount)
+
+        while true {
+            let outCount = outBuffer.count
+            try outBuffer.withUnsafeMutableBytes { outputRawBuffer in
+                guard let dstBase = outputRawBuffer.baseAddress?.assumingMemoryBound(to: Bytef.self) else {
+                    throw MuonGitError.invalidObject("failed to allocate zlib output buffer")
+                }
+                stream.next_out = dstBase
+                stream.avail_out = uInt(outCount)
+                status = inflate(&stream, Z_NO_FLUSH)
+            }
+
+            let produced = outBuffer.count - Int(stream.avail_out)
+            if produced > 0 {
+                output.append(contentsOf: outBuffer[0..<produced])
+            }
+
+            if status == Z_STREAM_END {
+                break
+            }
+            if status != Z_OK {
+                throw MuonGitError.invalidObject("failed to inflate zlib stream")
+            }
+            if produced == 0 && stream.avail_in == 0 {
+                throw MuonGitError.invalidObject("failed to inflate zlib stream")
+            }
+        }
+    }
+
+    return output
 }
 
 // MARK: - Loose Object Write
@@ -114,7 +170,7 @@ public func writeLooseObject(gitDir: String, type: ObjectType, data: Data) throw
     rawData.append(data)
 
     // Compress with zlib
-    let compressed = try (rawData as NSData).compressed(using: .zlib) as Data
+    let compressed = try Data(deflateLooseObjectData(rawData))
 
     // Ensure directory exists
     try FileManager.default.createDirectory(atPath: objectDir, withIntermediateDirectories: true)
@@ -123,4 +179,51 @@ public func writeLooseObject(gitDir: String, type: ObjectType, data: Data) throw
     try compressed.write(to: URL(fileURLWithPath: objectPath), options: .atomic)
 
     return oid
+}
+
+private func deflateLooseObjectData(_ input: Data) throws -> [UInt8] {
+    var stream = z_stream()
+    let initStatus = deflateInit_(&stream, Z_DEFAULT_COMPRESSION, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size))
+    guard initStatus == Z_OK else {
+        throw MuonGitError.invalidObject("failed to initialize zlib encoder")
+    }
+    defer { deflateEnd(&stream) }
+
+    var output: [UInt8] = []
+    var outBuffer = [UInt8](repeating: 0, count: 32 * 1024)
+    var inputCopy = input
+    let inputCount = inputCopy.count
+    var status = Int32(Z_OK)
+
+    try inputCopy.withUnsafeMutableBytes { inputRawBuffer in
+        let srcBase = inputRawBuffer.baseAddress?.assumingMemoryBound(to: Bytef.self)
+        stream.next_in = srcBase
+        stream.avail_in = uInt(inputCount)
+
+        while true {
+            let outCount = outBuffer.count
+            try outBuffer.withUnsafeMutableBytes { outputRawBuffer in
+                guard let dstBase = outputRawBuffer.baseAddress?.assumingMemoryBound(to: Bytef.self) else {
+                    throw MuonGitError.invalidObject("failed to allocate zlib output buffer")
+                }
+                stream.next_out = dstBase
+                stream.avail_out = uInt(outCount)
+                status = deflate(&stream, Z_FINISH)
+            }
+
+            let produced = outBuffer.count - Int(stream.avail_out)
+            if produced > 0 {
+                output.append(contentsOf: outBuffer[0..<produced])
+            }
+
+            if status == Z_STREAM_END {
+                break
+            }
+            if status != Z_OK {
+                throw MuonGitError.invalidObject("failed to deflate zlib stream")
+            }
+        }
+    }
+
+    return output
 }

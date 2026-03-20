@@ -4,11 +4,7 @@ import Foundation
 
 /// Read and parse a commit from the object database.
 private func readCommit(gitDir: String, oid: OID) throws -> Commit {
-    let (objType, data) = try readLooseObject(gitDir: gitDir, oid: oid)
-    guard objType == .commit else {
-        throw MuonGitError.invalidObject("expected commit, got \(objType)")
-    }
-    return try parseCommit(oid: oid, data: data)
+    try readObject(gitDir: gitDir, oid: oid).asCommit()
 }
 
 /// Collect all ancestors of a commit (including itself) via BFS.

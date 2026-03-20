@@ -6,6 +6,7 @@ use std::path::Path;
 
 use crate::error::MuonGitError;
 use crate::oid::OID;
+use crate::sha1::SHA1;
 
 const IDX_MAGIC: [u8; 4] = [0xFF, 0x74, 0x4F, 0x63]; // "\377tOc"
 const IDX_VERSION: u32 = 2;
@@ -131,6 +132,16 @@ pub fn parse_pack_index(data: &[u8]) -> Result<PackIndex, MuonGitError> {
 
 /// Build a pack index from components (for testing).
 pub fn build_pack_index(oids: &[OID], crcs: &[u32], offsets: &[u64]) -> Vec<u8> {
+    build_pack_index_with_checksums(oids, crcs, offsets, &[0u8; 20])
+}
+
+/// Build a pack index with a concrete pack checksum.
+pub fn build_pack_index_with_checksums(
+    oids: &[OID],
+    crcs: &[u32],
+    offsets: &[u64],
+    pack_checksum: &[u8; 20],
+) -> Vec<u8> {
     let _count = oids.len();
     let mut buf = Vec::new();
 
@@ -161,20 +172,25 @@ pub fn build_pack_index(oids: &[OID], crcs: &[u32], offsets: &[u64]) -> Vec<u8> 
     }
 
     // Offset table
+    let mut large_offsets = Vec::new();
     for offset in offsets {
         if *offset > 0x7FFFFFFF {
-            // Would need large offset table — not used in basic tests
-            buf.extend_from_slice(&(*offset as u32).to_be_bytes());
+            let idx = large_offsets.len() as u32;
+            buf.extend_from_slice(&(0x80000000 | idx).to_be_bytes());
+            large_offsets.push(*offset);
         } else {
             buf.extend_from_slice(&(*offset as u32).to_be_bytes());
         }
     }
 
-    // Pack checksum (dummy)
-    buf.extend_from_slice(&[0u8; 20]);
+    for offset in large_offsets {
+        buf.extend_from_slice(&offset.to_be_bytes());
+    }
 
-    // Index checksum (dummy — we don't validate it during parse)
-    buf.extend_from_slice(&[0u8; 20]);
+    buf.extend_from_slice(pack_checksum);
+
+    let idx_checksum = SHA1::hash(&buf);
+    buf.extend_from_slice(&idx_checksum);
 
     buf
 }

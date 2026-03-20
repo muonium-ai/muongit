@@ -5,9 +5,7 @@ import java.util.LinkedList
 
 /** Read and parse a commit from the object database. */
 private fun readCommit(gitDir: File, oid: OID): Commit {
-    val (objType, data) = readLooseObject(gitDir, oid)
-    require(objType == ObjectType.COMMIT) { "expected commit, got $objType" }
-    return parseCommit(oid, data)
+    return readObject(gitDir, oid).asCommit()
 }
 
 /** Collect all ancestors of a commit (including itself) via BFS. */

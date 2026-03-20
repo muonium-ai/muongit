@@ -3,12 +3,18 @@
 
 use std::path::Path;
 
+use crate::checkout::{reset, ResetMode};
 use crate::error::MuonGitError;
+use crate::merge_base::merge_base;
 use crate::oid::OID;
+use crate::pack::{build_pack_from_oids, index_pack_to_odb, IndexedPack};
 use crate::refs;
-use crate::remote::{add_remote, parse_refspec};
+use crate::remote::{add_remote, get_remote, parse_refspec};
+use crate::remote_transport::{
+    advertise_receive_pack, advertise_upload_pack, receive_pack, upload_pack, TransportOptions,
+};
 use crate::repository::Repository;
-use crate::transport::RemoteRef;
+use crate::transport::{pkt_line_decode, PktLine, RemoteRef, ServerCapabilities};
 
 // --- Fetch ---
 
@@ -228,6 +234,8 @@ pub struct CloneOptions {
     pub branch: Option<String>,
     /// Whether to create a bare clone.
     pub bare: bool,
+    /// Transport and credential options for the remote session.
+    pub transport: TransportOptions,
 }
 
 impl Default for CloneOptions {
@@ -236,8 +244,37 @@ impl Default for CloneOptions {
             remote_name: "origin".to_string(),
             branch: None,
             bare: false,
+            transport: TransportOptions::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FetchOptions {
+    pub refspecs: Option<Vec<String>>,
+    pub transport: TransportOptions,
+}
+
+#[derive(Debug, Clone)]
+pub struct FetchResult {
+    pub advertised_refs: Vec<RemoteRef>,
+    pub capabilities: ServerCapabilities,
+    pub matched_refs: Vec<MatchedRef>,
+    pub updated_refs: usize,
+    pub indexed_pack: Option<IndexedPack>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PushOptions {
+    pub refspecs: Option<Vec<String>>,
+    pub transport: TransportOptions,
+}
+
+#[derive(Debug, Clone)]
+pub struct PushResult {
+    pub advertised_refs: Vec<RemoteRef>,
+    pub updated_tracking_refs: usize,
+    pub report: String,
 }
 
 /// Set up a new repository for clone: init repo, add remote, configure HEAD.
@@ -295,6 +332,340 @@ pub fn default_branch_from_caps(caps: &crate::transport::ServerCapabilities) -> 
     } else {
         None
     }
+}
+
+pub fn clone_repository(
+    url: &str,
+    path: &str,
+    opts: &CloneOptions,
+) -> Result<Repository, MuonGitError> {
+    let repo = clone_setup(path, url, opts)?;
+    let fetch_opts = FetchOptions {
+        refspecs: None,
+        transport: opts.transport.clone(),
+    };
+    let fetch = fetch_remote(&repo, &opts.remote_name, &fetch_opts)?;
+    let (branch, head_oid) = resolve_clone_head(&fetch, opts.branch.as_deref())?;
+    clone_finish(repo.git_dir(), &opts.remote_name, &branch, &head_oid)?;
+    if !opts.bare {
+        let workdir = repo.workdir().ok_or(MuonGitError::BareRepo)?;
+        reset(repo.git_dir(), Some(workdir), "HEAD", ResetMode::Hard)?;
+    }
+    Ok(repo)
+}
+
+pub fn fetch_remote(
+    repo: &Repository,
+    remote_name: &str,
+    opts: &FetchOptions,
+) -> Result<FetchResult, MuonGitError> {
+    let remote = get_remote(repo.git_dir(), remote_name)?;
+    let advertised = advertise_upload_pack(&remote.url, &opts.transport)?;
+    let refspecs = opts
+        .refspecs
+        .clone()
+        .unwrap_or_else(|| remote.fetch_refspecs.clone());
+    let negotiation = compute_fetch_wants(&advertised.refs, &refspecs, repo.git_dir())?;
+
+    if negotiation.wants.is_empty() {
+        let updated_refs = update_refs_from_fetch(repo.git_dir(), &negotiation.matched_refs)?;
+        return Ok(FetchResult {
+            advertised_refs: advertised.refs,
+            capabilities: advertised.capabilities,
+            matched_refs: negotiation.matched_refs,
+            updated_refs,
+            indexed_pack: None,
+        });
+    }
+
+    let requested_caps = fetch_capabilities(&advertised.capabilities);
+    let caps: Vec<_> = requested_caps.iter().map(String::as_str).collect();
+    let request = crate::transport::build_want_have(&negotiation.wants, &negotiation.haves, &caps);
+    let response = upload_pack(&remote.url, &request, &opts.transport)?;
+    let pack = extract_pack_from_fetch_response(&response)?;
+    let indexed_pack = match pack {
+        Some(pack_bytes) => Some(index_pack_to_odb(repo.git_dir(), &pack_bytes)?),
+        None => None,
+    };
+    let updated_refs = update_refs_from_fetch(repo.git_dir(), &negotiation.matched_refs)?;
+
+    Ok(FetchResult {
+        advertised_refs: advertised.refs,
+        capabilities: advertised.capabilities,
+        matched_refs: negotiation.matched_refs,
+        updated_refs,
+        indexed_pack,
+    })
+}
+
+pub fn push_remote(
+    repo: &Repository,
+    remote_name: &str,
+    opts: &PushOptions,
+) -> Result<PushResult, MuonGitError> {
+    let remote = get_remote(repo.git_dir(), remote_name)?;
+    let advertised = advertise_receive_pack(&remote.url, &opts.transport)?;
+    let refspecs = if let Some(refspecs) = &opts.refspecs {
+        refspecs.clone()
+    } else {
+        default_push_refspecs(repo.git_dir())?
+    };
+    let push_refspecs: Vec<_> = refspecs.iter().map(String::as_str).collect();
+    let updates = compute_push_updates(&push_refspecs, repo.git_dir(), &advertised.refs)?;
+
+    for update in &updates {
+        if !update.force && !is_fast_forward(repo.git_dir(), &update.dst_oid, &update.src_oid)? {
+            return Err(MuonGitError::NotFastForward);
+        }
+    }
+
+    let exclude: Vec<_> = advertised.refs.iter().map(|r| r.oid.clone()).collect();
+    let roots: Vec<_> = updates.iter().map(|u| u.src_oid.clone()).collect();
+    let pack = build_pack_from_oids(repo.git_dir(), &roots, &exclude)?;
+    let request = build_push_request(&updates, &pack, &advertised.capabilities);
+    let response = receive_pack(&remote.url, &request, &opts.transport)?;
+    let report = parse_push_response(&response)?;
+    let updated_tracking_refs = update_tracking_refs_after_push(repo.git_dir(), remote_name, &updates)?;
+
+    Ok(PushResult {
+        advertised_refs: advertised.refs,
+        updated_tracking_refs,
+        report,
+    })
+}
+
+impl Repository {
+    pub fn fetch(
+        &self,
+        remote_name: &str,
+        opts: &FetchOptions,
+    ) -> Result<FetchResult, MuonGitError> {
+        fetch_remote(self, remote_name, opts)
+    }
+
+    pub fn push(
+        &self,
+        remote_name: &str,
+        opts: &PushOptions,
+    ) -> Result<PushResult, MuonGitError> {
+        push_remote(self, remote_name, opts)
+    }
+}
+
+fn fetch_capabilities(caps: &ServerCapabilities) -> Vec<String> {
+    let mut requested = Vec::new();
+    if caps.has("side-band-64k") {
+        requested.push("side-band-64k".to_string());
+    } else if caps.has("side-band") {
+        requested.push("side-band".to_string());
+    }
+    if caps.has("ofs-delta") {
+        requested.push("ofs-delta".to_string());
+    }
+    if caps.has("include-tag") {
+        requested.push("include-tag".to_string());
+    }
+    requested
+}
+
+fn extract_pack_from_fetch_response(response: &[u8]) -> Result<Option<Vec<u8>>, MuonGitError> {
+    let (lines, consumed) = pkt_line_decode(response)?;
+    let mut pack = Vec::new();
+
+    for line in lines {
+        if let PktLine::Data(data) = line {
+            if data.starts_with(b"ACK ") || data == b"NAK\n" {
+                continue;
+            }
+            match data.first().copied() {
+                Some(1) => pack.extend_from_slice(&data[1..]),
+                Some(2) => {}
+                Some(3) => {
+                    return Err(MuonGitError::Invalid(
+                        String::from_utf8_lossy(&data[1..]).trim().to_string(),
+                    ))
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if !pack.is_empty() {
+        return Ok(Some(pack));
+    }
+
+    if consumed < response.len() && response[consumed..].starts_with(b"PACK") {
+        return Ok(Some(response[consumed..].to_vec()));
+    }
+
+    Ok(None)
+}
+
+fn build_push_request(
+    updates: &[PushUpdate],
+    pack: &[u8],
+    caps: &ServerCapabilities,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut requested_caps = vec!["report-status".to_string()];
+    if caps.has("ofs-delta") {
+        requested_caps.push("ofs-delta".to_string());
+    }
+
+    for (idx, update) in updates.iter().enumerate() {
+        let line = if idx == 0 {
+            format!(
+                "{} {} {}\0{}\n",
+                update.dst_oid.hex(),
+                update.src_oid.hex(),
+                update.dst_ref,
+                requested_caps.join(" ")
+            )
+        } else {
+            format!(
+                "{} {} {}\n",
+                update.dst_oid.hex(),
+                update.src_oid.hex(),
+                update.dst_ref
+            )
+        };
+        out.extend_from_slice(&crate::transport::pkt_line_encode(line.as_bytes()));
+    }
+    out.extend_from_slice(&crate::transport::pkt_line_flush());
+    out.extend_from_slice(pack);
+    out
+}
+
+fn parse_push_response(response: &[u8]) -> Result<String, MuonGitError> {
+    let (lines, consumed) = pkt_line_decode(response)?;
+    let mut text = String::new();
+
+    for line in lines {
+        if let PktLine::Data(data) = line {
+            let payload = match data.first().copied() {
+                Some(1) | Some(2) => &data[1..],
+                Some(3) => {
+                    return Err(MuonGitError::Invalid(
+                        String::from_utf8_lossy(&data[1..]).trim().to_string(),
+                    ))
+                }
+                _ => &data[..],
+            };
+            text.push_str(&String::from_utf8_lossy(payload));
+        }
+    }
+
+    if consumed < response.len() {
+        text.push_str(&String::from_utf8_lossy(&response[consumed..]));
+    }
+
+    for line in text.lines() {
+        if line.starts_with("unpack ") && line != "unpack ok" {
+            return Err(MuonGitError::Invalid(line.to_string()));
+        }
+        if let Some(rest) = line.strip_prefix("ng ") {
+            return Err(MuonGitError::Invalid(rest.to_string()));
+        }
+    }
+
+    Ok(text)
+}
+
+fn resolve_clone_head(
+    fetch: &FetchResult,
+    branch: Option<&str>,
+) -> Result<(String, OID), MuonGitError> {
+    if let Some(branch) = branch {
+        let ref_name = format!("refs/heads/{}", branch);
+        let head_oid = fetch
+            .advertised_refs
+            .iter()
+            .find(|r| r.name == ref_name)
+            .map(|r| r.oid.clone())
+            .ok_or_else(|| MuonGitError::NotFound(format!("remote branch '{}' not found", branch)))?;
+        return Ok((branch.to_string(), head_oid));
+    }
+
+    if let Some(default_branch) = default_branch_from_caps(&fetch.capabilities) {
+        let ref_name = format!("refs/heads/{}", default_branch);
+        if let Some(head_oid) = fetch
+            .advertised_refs
+            .iter()
+            .find(|r| r.name == ref_name)
+            .map(|r| r.oid.clone())
+        {
+            return Ok((default_branch, head_oid));
+        }
+    }
+
+    let head_oid = fetch
+        .advertised_refs
+        .iter()
+        .find(|r| r.name == "HEAD")
+        .map(|r| r.oid.clone());
+    if let Some(head_oid) = head_oid {
+        if let Some(branch_ref) = fetch
+            .advertised_refs
+            .iter()
+            .find(|r| r.name.starts_with("refs/heads/") && r.oid == head_oid)
+        {
+            return Ok((
+                branch_ref
+                    .name
+                    .trim_start_matches("refs/heads/")
+                    .to_string(),
+                head_oid,
+            ));
+        }
+    }
+
+    for candidate in ["main", "master"] {
+        let ref_name = format!("refs/heads/{}", candidate);
+        if let Some(head_oid) = fetch
+            .advertised_refs
+            .iter()
+            .find(|r| r.name == ref_name)
+            .map(|r| r.oid.clone())
+        {
+            return Ok((candidate.to_string(), head_oid));
+        }
+    }
+
+    Err(MuonGitError::NotFound(
+        "could not determine remote default branch".into(),
+    ))
+}
+
+fn default_push_refspecs(git_dir: &Path) -> Result<Vec<String>, MuonGitError> {
+    let head = refs::read_reference(git_dir, "HEAD")?;
+    let target = head
+        .strip_prefix("ref: ")
+        .map(str::trim)
+        .ok_or_else(|| MuonGitError::InvalidSpec("HEAD is detached; provide push refspecs".into()))?;
+    Ok(vec![format!("{}:{}", target, target)])
+}
+
+fn is_fast_forward(git_dir: &Path, old_oid: &OID, new_oid: &OID) -> Result<bool, MuonGitError> {
+    if old_oid.is_zero() {
+        return Ok(true);
+    }
+    Ok(merge_base(git_dir, old_oid, new_oid)? == Some(old_oid.clone()))
+}
+
+fn update_tracking_refs_after_push(
+    git_dir: &Path,
+    remote_name: &str,
+    updates: &[PushUpdate],
+) -> Result<usize, MuonGitError> {
+    let mut updated = 0;
+    for update in updates {
+        if let Some(branch) = update.dst_ref.strip_prefix("refs/heads/") {
+            let tracking_ref = format!("refs/remotes/{}/{}", remote_name, branch);
+            refs::write_reference(git_dir, &tracking_ref, &update.src_oid)?;
+            updated += 1;
+        }
+    }
+    Ok(updated)
 }
 
 #[cfg(test)]
