@@ -9,6 +9,7 @@ pub mod sha256;
 pub mod repository;
 pub mod odb;
 pub mod object;
+pub mod patch;
 pub mod refs;
 pub mod commit;
 pub mod tree;
@@ -42,6 +43,10 @@ pub use oid::OID;
 pub use types::{ObjectType, Signature};
 pub use error::MuonGitError;
 pub use object::GitObject;
+pub use patch::{
+    Patch, PatchApplyResult, PatchFile, PatchFileApplyResult, PatchFileStatus, PatchHunk,
+    PatchLine, PatchLineKind, PatchReject,
+};
 pub use repository::Repository;
 
 /// Library version information
