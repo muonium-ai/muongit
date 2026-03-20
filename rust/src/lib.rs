@@ -35,6 +35,7 @@ pub mod revert;
 pub mod rebase;
 pub mod stash;
 pub mod blame;
+pub mod worktree;
 
 pub use oid::OID;
 pub use types::{ObjectType, Signature};

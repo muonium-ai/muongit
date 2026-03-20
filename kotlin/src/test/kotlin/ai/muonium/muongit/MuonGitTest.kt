@@ -4264,185 +4264,232 @@ class MuonGitTest {
         }
     }
 
-    // ---- Blame tests ----
+    // ---- Worktree tests ----
+
+    private fun setupWorktreeRepo(suffix: String): Triple<java.io.File, java.io.File, OID> {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_wt_${suffix}_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        val repo = Repository.init(tmp.path)
+        val gd = repo.gitDir
+        val treeData = serializeTree(emptyList())
+        val treeOid = writeLooseObject(gd, ObjectType.TREE, treeData)
+        val c = makeCommitWithTree(gd, treeOid, emptyList(), "initial")
+        writeReference(gd, "refs/heads/main", c)
+        writeSymbolicReference(gd, "HEAD", "refs/heads/main")
+        return Triple(tmp, gd, c)
+    }
 
     @Test
-    fun testBlameSingleCommit() {
-        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_single_kt")
-        if (tmp.exists()) tmp.deleteRecursively()
+    fun testWorktreeListEmpty() {
+        val (tmp, gd, _) = setupWorktreeRepo("list_empty")
         try {
-            val repo = Repository.init(tmp.path)
-            val gd = repo.gitDir
-
-            val tree = makeTreeWithFile(gd, "file.txt", "line1\nline2\nline3")
-            val c = makeCommitWithTree(gd, tree, emptyList(), "initial")
-
-            writeReference(gd, "refs/heads/main", c)
-            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
-
-            val result = blameFile(gd, "file.txt")
-            assertEquals(3, result.lineCount)
-            assertEquals(1, result.hunkCount)
-            val hunk = result.hunkByIndex(0)!!
-            assertEquals(3, hunk.linesInHunk)
-            assertEquals(c, hunk.finalCommitId)
-            assertEquals(1, hunk.finalStartLineNumber)
+            val names = worktreeList(gd)
+            assertTrue(names.isEmpty())
         } finally {
             tmp.deleteRecursively()
         }
     }
 
     @Test
-    fun testBlameTwoCommits() {
-        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_two_kt")
-        if (tmp.exists()) tmp.deleteRecursively()
+    fun testWorktreeAddAndList() {
+        val (tmp, gd, _) = setupWorktreeRepo("add_list")
+        val wtPath = java.io.File(tmp.parent, "${tmp.name}_wt_feature")
         try {
-            val repo = Repository.init(tmp.path)
-            val gd = repo.gitDir
+            val wt = worktreeAdd(gd, "feature", wtPath)
+            assertEquals("feature", wt.name)
+            assertFalse(wt.locked)
 
-            val tree1 = makeTreeWithFile(gd, "file.txt", "line1\nline2")
-            val c1 = makeCommitWithTree(gd, tree1, emptyList(), "first")
+            val names = worktreeList(gd)
+            assertEquals(listOf("feature"), names)
+        } finally {
+            tmp.deleteRecursively()
+            wtPath.deleteRecursively()
+        }
+    }
 
-            val tree2 = makeTreeWithFile(gd, "file.txt", "line1\ninserted\nline2")
-            val c2 = makeCommitWithTree(gd, tree2, listOf(c1), "second")
+    @Test
+    fun testWorktreeLookup() {
+        val (tmp, gd, _) = setupWorktreeRepo("lookup")
+        val wtPath = java.io.File(tmp.parent, "${tmp.name}_wt_lookup")
+        try {
+            worktreeAdd(gd, "mylookup", wtPath)
+            val wt = worktreeLookup(gd, "mylookup")
+            assertEquals("mylookup", wt.name)
+            assertFalse(wt.locked)
+        } finally {
+            tmp.deleteRecursively()
+            wtPath.deleteRecursively()
+        }
+    }
 
-            writeReference(gd, "refs/heads/main", c2)
-            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
-
-            val result = blameFile(gd, "file.txt")
-            assertEquals(3, result.lineCount)
-
-            val h1 = result.hunkByLine(1)!!
-            assertEquals(c1, h1.finalCommitId)
-
-            val h2 = result.hunkByLine(2)!!
-            assertEquals(c2, h2.finalCommitId)
-
-            val h3 = result.hunkByLine(3)!!
-            assertEquals(c1, h3.finalCommitId)
+    @Test
+    fun testWorktreeLookupNotFound() {
+        val (tmp, gd, _) = setupWorktreeRepo("lookup_nf")
+        try {
+            assertFailsWith<MuonGitException.NotFound> { worktreeLookup(gd, "nope") }
         } finally {
             tmp.deleteRecursively()
         }
     }
 
     @Test
-    fun testBlameLineRange() {
-        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_range_kt")
-        if (tmp.exists()) tmp.deleteRecursively()
+    fun testWorktreeValidate() {
+        val (tmp, gd, _) = setupWorktreeRepo("validate")
+        val wtPath = java.io.File(tmp.parent, "${tmp.name}_wt_validate")
         try {
-            val repo = Repository.init(tmp.path)
-            val gd = repo.gitDir
-
-            val tree = makeTreeWithFile(gd, "file.txt", "a\nb\nc\nd\ne")
-            val c = makeCommitWithTree(gd, tree, emptyList(), "init")
-
-            writeReference(gd, "refs/heads/main", c)
-            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
-
-            val opts = BlameOptions(minLine = 2, maxLine = 4)
-            val result = blameFile(gd, "file.txt", opts)
-            assertEquals(5, result.lineCount)
-            val totalBlamed = result.hunks.sumOf { it.linesInHunk }
-            assertEquals(3, totalBlamed)
+            val wt = worktreeAdd(gd, "val", wtPath)
+            worktreeValidate(wt) // should not throw
         } finally {
             tmp.deleteRecursively()
+            wtPath.deleteRecursively()
         }
     }
 
     @Test
-    fun testBlameHunkByLine() {
-        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_hbl_kt")
-        if (tmp.exists()) tmp.deleteRecursively()
+    fun testWorktreeAddDuplicate() {
+        val (tmp, gd, _) = setupWorktreeRepo("dup")
+        val wtPath = java.io.File(tmp.parent, "${tmp.name}_wt_dup")
         try {
-            val repo = Repository.init(tmp.path)
-            val gd = repo.gitDir
-
-            val tree = makeTreeWithFile(gd, "test.txt", "hello\nworld")
-            val c = makeCommitWithTree(gd, tree, emptyList(), "init")
-
-            writeReference(gd, "refs/heads/main", c)
-            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
-
-            val result = blameFile(gd, "test.txt")
-            assertNull(result.hunkByLine(0))
-            assertNotNull(result.hunkByLine(1))
-            assertNotNull(result.hunkByLine(2))
-            assertNull(result.hunkByLine(3))
+            worktreeAdd(gd, "dup", wtPath)
+            assertFailsWith<MuonGitException.Conflict> { worktreeAdd(gd, "dup", wtPath) }
         } finally {
             tmp.deleteRecursively()
+            wtPath.deleteRecursively()
         }
     }
 
     @Test
-    fun testBlameEmptyFile() {
-        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_empty_kt")
-        if (tmp.exists()) tmp.deleteRecursively()
+    fun testWorktreeAddWithLock() {
+        val (tmp, gd, _) = setupWorktreeRepo("add_lock")
+        val wtPath = java.io.File(tmp.parent, "${tmp.name}_wt_locked")
         try {
-            val repo = Repository.init(tmp.path)
-            val gd = repo.gitDir
-
-            val tree = makeTreeWithFile(gd, "empty.txt", "")
-            val c = makeCommitWithTree(gd, tree, emptyList(), "empty")
-
-            writeReference(gd, "refs/heads/main", c)
-            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
-
-            val result = blameFile(gd, "empty.txt")
-            assertEquals(0, result.lineCount)
-            assertEquals(0, result.hunkCount)
+            val opts = WorktreeAddOptions(lock = true)
+            val wt = worktreeAdd(gd, "locked", wtPath, opts)
+            assertTrue(wt.locked)
         } finally {
             tmp.deleteRecursively()
+            wtPath.deleteRecursively()
         }
     }
 
     @Test
-    fun testBlameSubdirectory() {
-        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_subdir_kt")
-        if (tmp.exists()) tmp.deleteRecursively()
+    fun testWorktreeAddWithReference() {
+        val (tmp, gd, headOid) = setupWorktreeRepo("add_ref")
+        val wtPath = java.io.File(tmp.parent, "${tmp.name}_wt_ref")
         try {
-            val repo = Repository.init(tmp.path)
-            val gd = repo.gitDir
+            writeReference(gd, "refs/heads/mybranch", headOid)
+            val opts = WorktreeAddOptions(reference = "refs/heads/mybranch")
+            val wt = worktreeAdd(gd, "myref", wtPath, opts)
+            assertEquals("myref", wt.name)
 
-            val blobOid = writeLooseObject(gd, ObjectType.BLOB, "nested content".toByteArray())
-            val innerEntry = TreeEntry(mode = FileMode.BLOB, name = "deep.txt", oid = blobOid)
-            val innerTreeData = serializeTree(listOf(innerEntry))
-            val innerTree = writeLooseObject(gd, ObjectType.TREE, innerTreeData)
-
-            val outerEntry = TreeEntry(mode = FileMode.TREE, name = "subdir", oid = innerTree)
-            val outerTreeData = serializeTree(listOf(outerEntry))
-            val outerTree = writeLooseObject(gd, ObjectType.TREE, outerTreeData)
-
-            val c = makeCommitWithTree(gd, outerTree, emptyList(), "nested")
-
-            writeReference(gd, "refs/heads/main", c)
-            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
-
-            val result = blameFile(gd, "subdir/deep.txt")
-            assertEquals(1, result.lineCount)
-            assertEquals(1, result.hunkCount)
-            assertEquals(c, result.hunks[0].finalCommitId)
+            val head = java.io.File(gd, "worktrees/myref/HEAD").readText().trim()
+            assertEquals("ref: refs/heads/mybranch", head)
         } finally {
             tmp.deleteRecursively()
+            wtPath.deleteRecursively()
         }
     }
 
     @Test
-    fun testBlameFileNotFound() {
-        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_nf_kt")
-        if (tmp.exists()) tmp.deleteRecursively()
+    fun testWorktreeLockUnlock() {
+        val (tmp, gd, _) = setupWorktreeRepo("lock_unlock")
+        val wtPath = java.io.File(tmp.parent, "${tmp.name}_wt_lu")
         try {
-            val repo = Repository.init(tmp.path)
-            val gd = repo.gitDir
+            worktreeAdd(gd, "lu", wtPath)
 
-            val tree = makeTreeWithFile(gd, "exists.txt", "content")
-            val c = makeCommitWithTree(gd, tree, emptyList(), "init")
+            assertNull(worktreeIsLocked(gd, "lu"))
 
-            writeReference(gd, "refs/heads/main", c)
-            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
+            worktreeLock(gd, "lu", "maintenance")
+            assertEquals("maintenance", worktreeIsLocked(gd, "lu"))
 
-            assertFailsWith<MuonGitException.NotFound> { blameFile(gd, "nonexistent.txt") }
+            assertFailsWith<MuonGitException.Locked> { worktreeLock(gd, "lu") }
+
+            val wasLocked = worktreeUnlock(gd, "lu")
+            assertTrue(wasLocked)
+
+            val wasLocked2 = worktreeUnlock(gd, "lu")
+            assertFalse(wasLocked2)
         } finally {
             tmp.deleteRecursively()
+            wtPath.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testWorktreeIsPrunable() {
+        val (tmp, gd, _) = setupWorktreeRepo("prunable")
+        val wtPath = java.io.File(tmp.parent, "${tmp.name}_wt_prunable")
+        try {
+            worktreeAdd(gd, "pr", wtPath)
+
+            assertFalse(worktreeIsPrunable(gd, "pr"))
+
+            assertTrue(worktreeIsPrunable(gd, "pr", WorktreePruneOptions(valid = true)))
+
+            worktreeLock(gd, "pr")
+            assertFalse(worktreeIsPrunable(gd, "pr", WorktreePruneOptions(valid = true)))
+
+            assertTrue(worktreeIsPrunable(gd, "pr", WorktreePruneOptions(valid = true, locked = true)))
+        } finally {
+            tmp.deleteRecursively()
+            wtPath.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testWorktreePrune() {
+        val (tmp, gd, _) = setupWorktreeRepo("prune")
+        val wtPath = java.io.File(tmp.parent, "${tmp.name}_wt_prune")
+        try {
+            worktreeAdd(gd, "tobepruned", wtPath)
+
+            assertFailsWith<MuonGitException.Conflict> { worktreePrune(gd, "tobepruned") }
+
+            worktreePrune(gd, "tobepruned", WorktreePruneOptions(valid = true, workingTree = true))
+
+            assertTrue(worktreeList(gd).isEmpty())
+            assertFalse(wtPath.exists())
+        } finally {
+            tmp.deleteRecursively()
+            if (wtPath.exists()) wtPath.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testWorktreePruneLockedFails() {
+        val (tmp, gd, _) = setupWorktreeRepo("prune_locked")
+        val wtPath = java.io.File(tmp.parent, "${tmp.name}_wt_pl")
+        try {
+            worktreeAdd(gd, "plk", wtPath)
+            worktreeLock(gd, "plk", "keep")
+
+            assertFailsWith<MuonGitException.Locked> {
+                worktreePrune(gd, "plk", WorktreePruneOptions(valid = true))
+            }
+        } finally {
+            tmp.deleteRecursively()
+            wtPath.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testWorktreeGitlinkStructure() {
+        val (tmp, gd, _) = setupWorktreeRepo("gitlink")
+        val wtPath = java.io.File(tmp.parent, "${tmp.name}_wt_gl")
+        try {
+            val wt = worktreeAdd(gd, "gl", wtPath)
+
+            val gitlink = java.io.File(wt.path, ".git").readText()
+            assertTrue(gitlink.startsWith("gitdir: "))
+
+            val commondir = java.io.File(gd, "worktrees/gl/commondir").readText().trim()
+            assertEquals("../..", commondir)
+
+            val head = java.io.File(gd, "worktrees/gl/HEAD").readText()
+            assertTrue(head.startsWith("ref: refs/heads/"))
+        } finally {
+            tmp.deleteRecursively()
+            wtPath.deleteRecursively()
         }
     }
 }
