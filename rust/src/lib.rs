@@ -11,6 +11,8 @@ pub mod odb;
 pub mod object;
 pub mod patch;
 pub mod refs;
+pub mod refdb;
+pub mod branch;
 pub mod commit;
 pub mod tree;
 pub mod blob;
@@ -47,6 +49,8 @@ pub use patch::{
     Patch, PatchApplyResult, PatchFile, PatchFileApplyResult, PatchFileStatus, PatchHunk,
     PatchLine, PatchLineKind, PatchReject,
 };
+pub use branch::{Branch, BranchType, BranchUpstream};
+pub use refdb::{RefDb, Reference};
 pub use repository::Repository;
 
 /// Library version information
