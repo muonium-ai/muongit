@@ -32,6 +32,7 @@ pub mod submodule;
 pub mod cherrypick;
 pub mod revert;
 pub mod rebase;
+pub mod stash;
 
 pub use oid::OID;
 pub use types::{ObjectType, Signature};

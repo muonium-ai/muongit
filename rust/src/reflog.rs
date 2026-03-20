@@ -104,6 +104,43 @@ pub fn append_reflog(
     Ok(())
 }
 
+/// Drop a reflog entry by index (0 = oldest). Returns the remaining entries.
+/// If no entries remain, the reflog file is deleted.
+pub fn drop_reflog_entry(
+    git_dir: &Path,
+    ref_name: &str,
+    index: usize,
+) -> Result<Vec<ReflogEntry>, MuonGitError> {
+    let log_path = git_dir.join("logs").join(ref_name);
+    let mut entries = read_reflog(git_dir, ref_name)?;
+
+    if index >= entries.len() {
+        return Err(MuonGitError::NotFound(format!(
+            "reflog entry {} not found for {}",
+            index, ref_name
+        )));
+    }
+
+    entries.remove(index);
+
+    if entries.is_empty() {
+        let _ = fs::remove_file(&log_path);
+    } else {
+        let mut content = String::new();
+        for entry in &entries {
+            content.push_str(&format_reflog_entry(
+                &entry.old_oid,
+                &entry.new_oid,
+                &entry.committer,
+                &entry.message,
+            ));
+        }
+        fs::write(&log_path, content)?;
+    }
+
+    Ok(entries)
+}
+
 fn format_reflog_entry(old_oid: &OID, new_oid: &OID, committer: &Signature, message: &str) -> String {
     let sign = if committer.offset >= 0 { "+" } else { "-" };
     let abs = committer.offset.unsigned_abs();

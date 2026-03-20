@@ -3585,6 +3585,202 @@ class MuonGitTest {
         assertTrue(msSha256 < 500.0)
     }
 
+    // -- Stash Tests --
+
+    private fun setupStashRepo(name: String): Triple<java.io.File, java.io.File, java.io.File> {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_stash_${name}_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        val repo = Repository.init(tmp.path)
+        val gd = repo.gitDir
+        val wd = tmp
+
+        // Create initial commit with a file
+        val blobOid = writeLooseObject(gd, ObjectType.BLOB, "initial\n".toByteArray())
+        val entry = TreeEntry(mode = FileMode.BLOB, name = "file.txt", oid = blobOid)
+        val treeData = serializeTree(listOf(entry))
+        val treeOid = writeLooseObject(gd, ObjectType.TREE, treeData)
+
+        val sig = Signature("Test User", "test@example.com", 1000000000L, 0)
+        val commitData = serializeCommit(
+            treeId = treeOid,
+            parentIds = emptyList(),
+            author = sig,
+            committer = sig,
+            message = "initial commit\n"
+        )
+        val commitOid = writeLooseObject(gd, ObjectType.COMMIT, commitData)
+        writeReference(gd, "refs/heads/main", commitOid)
+        writeSymbolicReference(gd, "HEAD", "refs/heads/main")
+
+        // Write the file to workdir
+        java.io.File(wd, "file.txt").writeText("initial\n")
+
+        return Triple(tmp, gd, wd)
+    }
+
+    @Test
+    fun testStashSaveAndList() {
+        val (tmp, gd, wd) = setupStashRepo("save")
+        try {
+            java.io.File(wd, "file.txt").writeText("modified\n")
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+            val oid = stashSave(gd, wd, sig, "my stash")
+            assertTrue(oid.hex.isNotEmpty())
+
+            val entries = stashList(gd)
+            assertEquals(1, entries.size)
+            assertEquals(0, entries[0].index)
+            assertTrue(entries[0].message.contains("my stash"))
+            assertEquals(oid, entries[0].oid)
+        } finally { tmp.deleteRecursively() }
+    }
+
+    @Test
+    fun testStashMultiple() {
+        val (tmp, gd, wd) = setupStashRepo("multi")
+        try {
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+
+            java.io.File(wd, "file.txt").writeText("change1\n")
+            stashSave(gd, wd, sig, "first")
+
+            java.io.File(wd, "file.txt").writeText("change2\n")
+            stashSave(gd, wd, sig, "second")
+
+            val entries = stashList(gd)
+            assertEquals(2, entries.size)
+            assertEquals(0, entries[0].index)
+            assertTrue(entries[0].message.contains("second"))
+            assertEquals(1, entries[1].index)
+            assertTrue(entries[1].message.contains("first"))
+        } finally { tmp.deleteRecursively() }
+    }
+
+    @Test
+    fun testStashApply() {
+        val (tmp, gd, wd) = setupStashRepo("apply")
+        try {
+            java.io.File(wd, "file.txt").writeText("stashed content\n")
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+            stashSave(gd, wd, sig, "apply test")
+
+            val result = stashApply(gd, 0)
+            assertFalse(result.hasConflicts)
+            assertTrue(result.files.isNotEmpty())
+
+            // Stash should still exist
+            val entries = stashList(gd)
+            assertEquals(1, entries.size)
+        } finally { tmp.deleteRecursively() }
+    }
+
+    @Test
+    fun testStashPop() {
+        val (tmp, gd, wd) = setupStashRepo("pop")
+        try {
+            java.io.File(wd, "file.txt").writeText("pop content\n")
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+            stashSave(gd, wd, sig, "pop test")
+
+            val result = stashPop(gd, 0)
+            assertFalse(result.hasConflicts)
+
+            // Stash should be removed
+            val entries = stashList(gd)
+            assertEquals(0, entries.size)
+        } finally { tmp.deleteRecursively() }
+    }
+
+    @Test
+    fun testStashDrop() {
+        val (tmp, gd, wd) = setupStashRepo("drop")
+        try {
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+            java.io.File(wd, "file.txt").writeText("drop1\n")
+            stashSave(gd, wd, sig, "first")
+            java.io.File(wd, "file.txt").writeText("drop2\n")
+            stashSave(gd, wd, sig, "second")
+
+            stashDrop(gd, 0)
+            val entries = stashList(gd)
+            assertEquals(1, entries.size)
+            assertTrue(entries[0].message.contains("first"))
+        } finally { tmp.deleteRecursively() }
+    }
+
+    @Test
+    fun testStashDropLast() {
+        val (tmp, gd, wd) = setupStashRepo("droplast")
+        try {
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+            java.io.File(wd, "file.txt").writeText("droplast\n")
+            stashSave(gd, wd, sig, "only")
+
+            stashDrop(gd, 0)
+            val entries = stashList(gd)
+            assertEquals(0, entries.size)
+
+            // refs/stash should be gone
+            assertFailsWith<MuonGitException> { resolveReference(gd, "refs/stash") }
+        } finally { tmp.deleteRecursively() }
+    }
+
+    @Test
+    fun testStashEmptyWorkdirFails() {
+        val (tmp, gd, wd) = setupStashRepo("empty")
+        try {
+            // Remove workdir file so there's nothing to stash
+            java.io.File(wd, "file.txt").delete()
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+            val e = assertFailsWith<MuonGitException.NotFound> {
+                stashSave(gd, wd, sig, "should fail")
+            }
+            assertTrue(e.message!!.contains("no local changes"))
+        } finally { tmp.deleteRecursively() }
+    }
+
+    @Test
+    fun testStashBareRepoFails() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_stash_bare_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path, bare = true)
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+            assertFailsWith<MuonGitException.BareRepo> {
+                stashSave(repo.gitDir, null, sig, "bare stash")
+            }
+        } finally { tmp.deleteRecursively() }
+    }
+
+    @Test
+    fun testStashInvalidIndex() {
+        val (tmp, gd, wd) = setupStashRepo("invalid")
+        try {
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+            java.io.File(wd, "file.txt").writeText("test\n")
+            stashSave(gd, wd, sig, "one")
+
+            val e = assertFailsWith<MuonGitException.NotFound> {
+                stashApply(gd, 99)
+            }
+            assertTrue(e.message!!.contains("99"))
+        } finally { tmp.deleteRecursively() }
+    }
+
+    @Test
+    fun testStashDefaultMessage() {
+        val (tmp, gd, wd) = setupStashRepo("defmsg")
+        try {
+            java.io.File(wd, "file.txt").writeText("changed\n")
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+            stashSave(gd, wd, sig)
+
+            val entries = stashList(gd)
+            assertEquals(1, entries.size)
+            assertTrue(entries[0].message.contains("WIP on"))
+        } finally { tmp.deleteRecursively() }
+    }
+
     // -- Cherry-pick Tests --
 
     private fun makeTreeWithFile(gitDir: java.io.File, name: String, content: String): OID {

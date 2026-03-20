@@ -3223,6 +3223,165 @@ final class MuonGitTests: XCTestCase {
         XCTAssertTrue(msSha256 < 1000.0)
     }
 
+    // MARK: - Stash Tests
+
+    private func setupStashRepo(_ name: String) throws -> (String, Repository, OID) {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("muongit_swift_\(name)_\(UUID().uuidString)").path
+        let repo = try Repository.create(at: tmp)
+        let gitDir = repo.gitDir
+        let workdir = repo.workdir!
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1000000000, offset: 0)
+
+        let blobOid = try writeLooseObject(gitDir: gitDir, type: .blob, data: Data("initial content\n".utf8))
+        let entry = TreeEntry(mode: FileMode.blob.rawValue, name: "file.txt", oid: blobOid)
+        let treeData = serializeTree(entries: [entry])
+        let treeOid = try writeLooseObject(gitDir: gitDir, type: .tree, data: treeData)
+        let commitData = serializeCommit(treeId: treeOid, parentIds: [], author: sig, committer: sig, message: "initial commit\n")
+        let commitOid = try writeLooseObject(gitDir: gitDir, type: .commit, data: commitData)
+        try writeReference(gitDir: gitDir, name: "refs/heads/main", oid: commitOid)
+        try writeSymbolicReference(gitDir: gitDir, name: "HEAD", target: "refs/heads/main")
+        try "initial content\n".write(toFile: (workdir as NSString).appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+
+        return (tmp, repo, commitOid)
+    }
+
+    func testStashSaveAndList() throws {
+        let (tmp, repo, _) = try setupStashRepo("stash_save_list")
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1000000000, offset: 0)
+
+        try "modified content\n".write(toFile: (repo.workdir! as NSString).appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+        let stashOid = try stashSave(gitDir: repo.gitDir, workdir: repo.workdir, stasher: sig, message: "test stash")
+        XCTAssertFalse(stashOid.isZero)
+
+        let stashes = try stashList(gitDir: repo.gitDir)
+        XCTAssertEqual(stashes.count, 1)
+        XCTAssertEqual(stashes[0].index, 0)
+        XCTAssertTrue(stashes[0].message.contains("test stash"))
+        XCTAssertEqual(stashes[0].oid, stashOid)
+    }
+
+    func testStashMultiple() throws {
+        let (tmp, repo, _) = try setupStashRepo("stash_multiple")
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1000000000, offset: 0)
+
+        try "change 1\n".write(toFile: (repo.workdir! as NSString).appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+        let oid1 = try stashSave(gitDir: repo.gitDir, workdir: repo.workdir, stasher: sig, message: "first")
+
+        try "change 2\n".write(toFile: (repo.workdir! as NSString).appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+        let oid2 = try stashSave(gitDir: repo.gitDir, workdir: repo.workdir, stasher: sig, message: "second")
+
+        let stashes = try stashList(gitDir: repo.gitDir)
+        XCTAssertEqual(stashes.count, 2)
+        XCTAssertEqual(stashes[0].index, 0)
+        XCTAssertEqual(stashes[0].oid, oid2)
+        XCTAssertEqual(stashes[1].index, 1)
+        XCTAssertEqual(stashes[1].oid, oid1)
+    }
+
+    func testStashApply() throws {
+        let (tmp, repo, _) = try setupStashRepo("stash_apply")
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1000000000, offset: 0)
+
+        try "stashed content\n".write(toFile: (repo.workdir! as NSString).appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+        try stashSave(gitDir: repo.gitDir, workdir: repo.workdir, stasher: sig)
+
+        let result = try stashApply(gitDir: repo.gitDir, index: 0)
+        XCTAssertFalse(result.hasConflicts)
+        let file = result.files.first { $0.0 == "file.txt" }
+        XCTAssertEqual(file?.1, "stashed content\n")
+
+        // Stash should still exist
+        let stashes = try stashList(gitDir: repo.gitDir)
+        XCTAssertEqual(stashes.count, 1)
+    }
+
+    func testStashPop() throws {
+        let (tmp, repo, _) = try setupStashRepo("stash_pop")
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1000000000, offset: 0)
+
+        try "popped content\n".write(toFile: (repo.workdir! as NSString).appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+        try stashSave(gitDir: repo.gitDir, workdir: repo.workdir, stasher: sig)
+
+        let result = try stashPop(gitDir: repo.gitDir, index: 0)
+        XCTAssertFalse(result.hasConflicts)
+
+        let stashes = try stashList(gitDir: repo.gitDir)
+        XCTAssertEqual(stashes.count, 0)
+    }
+
+    func testStashDrop() throws {
+        let (tmp, repo, _) = try setupStashRepo("stash_drop")
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1000000000, offset: 0)
+
+        try "change A\n".write(toFile: (repo.workdir! as NSString).appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+        try stashSave(gitDir: repo.gitDir, workdir: repo.workdir, stasher: sig, message: "A")
+
+        try "change B\n".write(toFile: (repo.workdir! as NSString).appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+        let oidB = try stashSave(gitDir: repo.gitDir, workdir: repo.workdir, stasher: sig, message: "B")
+
+        try stashDrop(gitDir: repo.gitDir, index: 1) // drop older
+
+        let stashes = try stashList(gitDir: repo.gitDir)
+        XCTAssertEqual(stashes.count, 1)
+        XCTAssertEqual(stashes[0].oid, oidB)
+    }
+
+    func testStashDropLast() throws {
+        let (tmp, repo, _) = try setupStashRepo("stash_drop_last")
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1000000000, offset: 0)
+
+        try "only stash\n".write(toFile: (repo.workdir! as NSString).appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+        try stashSave(gitDir: repo.gitDir, workdir: repo.workdir, stasher: sig)
+
+        try stashDrop(gitDir: repo.gitDir, index: 0)
+
+        XCTAssertThrowsError(try resolveReference(gitDir: repo.gitDir, name: "refs/stash"))
+        let stashes = try stashList(gitDir: repo.gitDir)
+        XCTAssertEqual(stashes.count, 0)
+    }
+
+    func testStashEmptyWorkdirFails() throws {
+        let (tmp, repo, _) = try setupStashRepo("stash_empty")
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        // Remove the workdir file so there's nothing to stash
+        try FileManager.default.removeItem(atPath: repo.workdir! + "/file.txt")
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1000000001, offset: 0)
+        XCTAssertThrowsError(try stashSave(gitDir: repo.gitDir, workdir: repo.workdir, stasher: sig, message: "should fail"))
+    }
+
+    func testStashBareRepoFails() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("muongit_swift_stash_bare_\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp, bare: true)
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1000000000, offset: 0)
+        XCTAssertThrowsError(try stashSave(gitDir: repo.gitDir, workdir: nil, stasher: sig))
+    }
+
+    func testStashInvalidIndex() throws {
+        let (tmp, repo, _) = try setupStashRepo("stash_invalid_idx")
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        XCTAssertThrowsError(try stashApply(gitDir: repo.gitDir, index: 0))
+        XCTAssertThrowsError(try stashDrop(gitDir: repo.gitDir, index: 0))
+    }
+
+    func testStashDefaultMessage() throws {
+        let (tmp, repo, _) = try setupStashRepo("stash_default_msg")
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1000000000, offset: 0)
+
+        try "changed\n".write(toFile: (repo.workdir! as NSString).appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+        try stashSave(gitDir: repo.gitDir, workdir: repo.workdir, stasher: sig)
+
+        let stashes = try stashList(gitDir: repo.gitDir)
+        XCTAssertTrue(stashes[0].message.hasPrefix("WIP on main:"))
+    }
+
     // MARK: - Cherry-pick Tests
 
     private func makeTreeWithFile(gitDir: String, name: String, content: String) throws -> OID {

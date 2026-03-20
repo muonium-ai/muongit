@@ -62,7 +62,7 @@
 ## Phase 7: Advanced
 - [x] Submodule support
 - [ ] Worktree support
-- [ ] Stash
+- [x] Stash
 - [ ] Blame
 - [ ] Describe
 - [ ] Notes
