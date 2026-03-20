@@ -178,14 +178,14 @@ impl CrlfFilter {
         };
 
         // Fall back to crlf attribute
-        let is_text = is_text.or_else(|| match crlf_attr {
+        let is_text = is_text.or(match crlf_attr {
             Some(AttrValue::Set) => Some(true),
             Some(AttrValue::Unset) => Some(false),
             _ => None,
         });
 
         // Fall back to core.autocrlf config
-        let is_text = is_text.or_else(|| match self.auto_crlf.as_deref() {
+        let is_text = is_text.or(match self.auto_crlf.as_deref() {
             Some("true") => Some(true),
             Some("input") => Some(true),
             _ => None,
