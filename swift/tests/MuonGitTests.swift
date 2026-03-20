@@ -3445,4 +3445,255 @@ final class MuonGitTests: XCTestCase {
         XCTAssertTrue(msSha1 < 1000.0)
         XCTAssertTrue(msSha256 < 1000.0)
     }
+
+    // MARK: - Cherry-pick Tests
+
+    private func makeTreeWithFile(gitDir: String, name: String, content: String) throws -> OID {
+        let blobOid = try writeLooseObject(gitDir: gitDir, type: .blob, data: Data(content.utf8))
+        let entry = TreeEntry(mode: FileMode.blob.rawValue, name: name, oid: blobOid)
+        let treeData = serializeTree(entries: [entry])
+        return try writeLooseObject(gitDir: gitDir, type: .tree, data: treeData)
+    }
+
+    private func makeTreeWithFiles(gitDir: String, files: [(String, String)]) throws -> OID {
+        var entries: [TreeEntry] = []
+        for (name, content) in files {
+            let blobOid = try writeLooseObject(gitDir: gitDir, type: .blob, data: Data(content.utf8))
+            entries.append(TreeEntry(mode: FileMode.blob.rawValue, name: name, oid: blobOid))
+        }
+        let treeData = serializeTree(entries: entries)
+        return try writeLooseObject(gitDir: gitDir, type: .tree, data: treeData)
+    }
+
+    private func makeCommitWithTree(gitDir: String, treeOid: OID, parents: [OID], msg: String) throws -> OID {
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1000000000, offset: 0)
+        let data = serializeCommit(
+            treeId: treeOid,
+            parentIds: parents,
+            author: sig,
+            committer: sig,
+            message: msg
+        )
+        return try writeLooseObject(gitDir: gitDir, type: .commit, data: data)
+    }
+
+    func testCherryPickBasic() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_cp_basic"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let gd = repo.gitDir
+
+        // c0: file.txt = "base\n"
+        let tree0 = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "base\n")
+        let c0 = try makeCommitWithTree(gitDir: gd, treeOid: tree0, parents: [], msg: "c0")
+
+        // c1: file.txt = "base\nline2\n" (on a different branch)
+        let tree1 = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "base\nline2\n")
+        let c1 = try makeCommitWithTree(gitDir: gd, treeOid: tree1, parents: [c0], msg: "c1")
+
+        // HEAD = c0
+        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c0)
+
+        let result = try cherryPick(gitDir: gd, commitOid: c1)
+        XCTAssertFalse(result.hasConflicts)
+        XCTAssertEqual(result.files.count, 1)
+        XCTAssertEqual(result.files[0].0, "file.txt")
+        XCTAssertEqual(result.files[0].1, "base\nline2\n")
+
+        // State files should be written
+        XCTAssertTrue(FileManager.default.fileExists(atPath: gd + "/CHERRY_PICK_HEAD"))
+        cherryPickCleanup(gitDir: gd)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: gd + "/CHERRY_PICK_HEAD"))
+    }
+
+    func testCherryPickConflict() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_cp_conflict"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let gd = repo.gitDir
+
+        let tree0 = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "line1\n")
+        let c0 = try makeCommitWithTree(gitDir: gd, treeOid: tree0, parents: [], msg: "c0")
+
+        // Branch: modifies to "branch change\n"
+        let tree1 = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "branch change\n")
+        let c1 = try makeCommitWithTree(gitDir: gd, treeOid: tree1, parents: [c0], msg: "c1")
+
+        // HEAD: modifies to "head change\n"
+        let treeH = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "head change\n")
+        let cH = try makeCommitWithTree(gitDir: gd, treeOid: treeH, parents: [c0], msg: "head")
+        try writeReference(gitDir: gd, name: "refs/heads/main", oid: cH)
+
+        let result = try cherryPick(gitDir: gd, commitOid: c1)
+        XCTAssertTrue(result.hasConflicts)
+        cherryPickCleanup(gitDir: gd)
+    }
+
+    func testCherryPickNewFile() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_cp_newfile"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let gd = repo.gitDir
+
+        let tree0 = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "data\n")
+        let c0 = try makeCommitWithTree(gitDir: gd, treeOid: tree0, parents: [], msg: "c0")
+
+        // Branch: adds new.txt
+        let tree1 = try makeTreeWithFiles(gitDir: gd, files: [("file.txt", "data\n"), ("new.txt", "new content\n")])
+        let c1 = try makeCommitWithTree(gitDir: gd, treeOid: tree1, parents: [c0], msg: "c1")
+
+        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c0)
+
+        let result = try cherryPick(gitDir: gd, commitOid: c1)
+        XCTAssertFalse(result.hasConflicts)
+        let names = result.files.map { $0.0 }
+        XCTAssertTrue(names.contains("new.txt"))
+        cherryPickCleanup(gitDir: gd)
+    }
+
+    // MARK: - Revert Tests
+
+    func testRevertBasic() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_rv_basic"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let gd = repo.gitDir
+
+        let tree0 = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "original\n")
+        let c0 = try makeCommitWithTree(gitDir: gd, treeOid: tree0, parents: [], msg: "c0")
+
+        let tree1 = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "changed\n")
+        let c1 = try makeCommitWithTree(gitDir: gd, treeOid: tree1, parents: [c0], msg: "c1")
+
+        // HEAD = c1 (latest), revert c1 → should restore "original\n"
+        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c1)
+
+        let result = try revert(gitDir: gd, commitOid: c1)
+        XCTAssertFalse(result.hasConflicts)
+        XCTAssertEqual(result.files.count, 1)
+        XCTAssertEqual(result.files[0].1, "original\n")
+        revertCleanup(gitDir: gd)
+    }
+
+    func testRevertConflict() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_rv_conflict"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let gd = repo.gitDir
+
+        let tree0 = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "line1\n")
+        let c0 = try makeCommitWithTree(gitDir: gd, treeOid: tree0, parents: [], msg: "c0")
+
+        let tree1 = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "modified\n")
+        let c1 = try makeCommitWithTree(gitDir: gd, treeOid: tree1, parents: [c0], msg: "c1")
+
+        // HEAD has further changes
+        let treeH = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "further changes\n")
+        let cH = try makeCommitWithTree(gitDir: gd, treeOid: treeH, parents: [c1], msg: "head")
+        try writeReference(gitDir: gd, name: "refs/heads/main", oid: cH)
+
+        let result = try revert(gitDir: gd, commitOid: c1)
+        XCTAssertTrue(result.hasConflicts)
+        revertCleanup(gitDir: gd)
+    }
+
+    // MARK: - Rebase Tests
+
+    func testRebaseBasic() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_rebase_basic"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let gd = repo.gitDir
+
+        let tree0 = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "base\n")
+        let c0 = try makeCommitWithTree(gitDir: gd, treeOid: tree0, parents: [], msg: "base")
+
+        // Main adds main.txt
+        let tree1 = try makeTreeWithFiles(gitDir: gd, files: [("file.txt", "base\n"), ("main.txt", "main\n")])
+        let c1 = try makeCommitWithTree(gitDir: gd, treeOid: tree1, parents: [c0], msg: "main: add main.txt")
+
+        // Topic modifies file.txt
+        let tree2 = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "base\ntopic line\n")
+        let c2 = try makeCommitWithTree(gitDir: gd, treeOid: tree2, parents: [c0], msg: "topic: modify file")
+
+        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c1)
+
+        let rebase = try Rebase.begin(gitDir: gd, branch: c2, upstream: c0, onto: c1)
+        XCTAssertEqual(rebase.operationCount, 1)
+
+        let op = try rebase.next()
+        XCTAssertNotNil(op)
+        let (hasConflicts, _) = try rebase.applyCurrent()
+        XCTAssertFalse(hasConflicts)
+
+        let sig = Signature(name: "Test", email: "test@test.com", time: 1000000000, offset: 0)
+        let newOid = try rebase.commit(committer: sig)
+        XCTAssertFalse(newOid.isZero)
+
+        let nextOp = try rebase.next()
+        XCTAssertNil(nextOp)
+
+        try rebase.finish()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: gd + "/rebase-merge"))
+    }
+
+    func testRebaseAbort() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_rebase_abort"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let gd = repo.gitDir
+
+        let tree0 = try makeTreeWithFile(gitDir: gd, name: "f.txt", content: "data\n")
+        let c0 = try makeCommitWithTree(gitDir: gd, treeOid: tree0, parents: [], msg: "c0")
+
+        let tree1 = try makeTreeWithFile(gitDir: gd, name: "f.txt", content: "data2\n")
+        let c1 = try makeCommitWithTree(gitDir: gd, treeOid: tree1, parents: [c0], msg: "c1")
+
+        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c0)
+
+        let rebase = try Rebase.begin(gitDir: gd, branch: c1, upstream: c0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: gd + "/rebase-merge"))
+
+        try rebase.abort()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: gd + "/rebase-merge"))
+    }
+
+    func testRebaseOpen() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_rebase_open"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let gd = repo.gitDir
+
+        let tree0 = try makeTreeWithFile(gitDir: gd, name: "f.txt", content: "data\n")
+        let c0 = try makeCommitWithTree(gitDir: gd, treeOid: tree0, parents: [], msg: "c0")
+
+        let tree1 = try makeTreeWithFile(gitDir: gd, name: "f.txt", content: "more\n")
+        let c1 = try makeCommitWithTree(gitDir: gd, treeOid: tree1, parents: [c0], msg: "c1")
+
+        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c0)
+
+        let _ = try Rebase.begin(gitDir: gd, branch: c1, upstream: c0)
+
+        let reopened = try Rebase.open(gitDir: gd)
+        XCTAssertEqual(reopened.operationCount, 1)
+        XCTAssertEqual(reopened.operations[0].id, c1)
+
+        try reopened.abort()
+    }
 }

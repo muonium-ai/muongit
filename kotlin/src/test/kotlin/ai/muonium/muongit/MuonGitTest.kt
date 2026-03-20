@@ -3805,4 +3805,266 @@ class MuonGitTest {
         assertTrue(msSha1 < 500.0)
         assertTrue(msSha256 < 500.0)
     }
+
+    // -- Cherry-pick Tests --
+
+    private fun makeTreeWithFile(gitDir: java.io.File, name: String, content: String): OID {
+        val blobOid = writeLooseObject(gitDir, ObjectType.BLOB, content.toByteArray())
+        val entry = TreeEntry(mode = FileMode.BLOB, name = name, oid = blobOid)
+        val treeData = serializeTree(listOf(entry))
+        return writeLooseObject(gitDir, ObjectType.TREE, treeData)
+    }
+
+    private fun makeTreeWithFiles(gitDir: java.io.File, files: List<Pair<String, String>>): OID {
+        val entries = files.map { (name, content) ->
+            val blobOid = writeLooseObject(gitDir, ObjectType.BLOB, content.toByteArray())
+            TreeEntry(mode = FileMode.BLOB, name = name, oid = blobOid)
+        }
+        val treeData = serializeTree(entries)
+        return writeLooseObject(gitDir, ObjectType.TREE, treeData)
+    }
+
+    private fun makeCommitWithTree(gitDir: java.io.File, treeOid: OID, parents: List<OID>, msg: String): OID {
+        val sig = Signature("Test", "test@test.com", 1000000000L, 0)
+        val data = serializeCommit(
+            treeId = treeOid,
+            parentIds = parents,
+            author = sig,
+            committer = sig,
+            message = msg
+        )
+        return writeLooseObject(gitDir, ObjectType.COMMIT, data)
+    }
+
+    @Test
+    fun testCherryPickBasic() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_cp_basic_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree0 = makeTreeWithFile(gd, "file.txt", "base\n")
+            val c0 = makeCommitWithTree(gd, tree0, emptyList(), "c0")
+
+            val tree1 = makeTreeWithFile(gd, "file.txt", "base\nline2\n")
+            val c1 = makeCommitWithTree(gd, tree1, listOf(c0), "c1")
+
+            writeReference(gd, "refs/heads/main", c0)
+
+            val result = cherryPick(gd, c1)
+            assertFalse(result.hasConflicts)
+            assertEquals(1, result.files.size)
+            assertEquals("file.txt", result.files[0].first)
+            assertEquals("base\nline2\n", result.files[0].second)
+
+            assertTrue(gd.resolve("CHERRY_PICK_HEAD").exists())
+            cherryPickCleanup(gd)
+            assertFalse(gd.resolve("CHERRY_PICK_HEAD").exists())
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testCherryPickConflict() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_cp_conflict_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree0 = makeTreeWithFile(gd, "file.txt", "line1\n")
+            val c0 = makeCommitWithTree(gd, tree0, emptyList(), "c0")
+
+            val tree1 = makeTreeWithFile(gd, "file.txt", "branch change\n")
+            val c1 = makeCommitWithTree(gd, tree1, listOf(c0), "c1")
+
+            val treeH = makeTreeWithFile(gd, "file.txt", "head change\n")
+            val cH = makeCommitWithTree(gd, treeH, listOf(c0), "head")
+            writeReference(gd, "refs/heads/main", cH)
+
+            val result = cherryPick(gd, c1)
+            assertTrue(result.hasConflicts)
+            cherryPickCleanup(gd)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testCherryPickNewFile() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_cp_newfile_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree0 = makeTreeWithFile(gd, "file.txt", "data\n")
+            val c0 = makeCommitWithTree(gd, tree0, emptyList(), "c0")
+
+            val tree1 = makeTreeWithFiles(gd, listOf("file.txt" to "data\n", "new.txt" to "new content\n"))
+            val c1 = makeCommitWithTree(gd, tree1, listOf(c0), "c1")
+
+            writeReference(gd, "refs/heads/main", c0)
+
+            val result = cherryPick(gd, c1)
+            assertFalse(result.hasConflicts)
+            assertTrue(result.files.any { it.first == "new.txt" })
+            cherryPickCleanup(gd)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    // -- Revert Tests --
+
+    @Test
+    fun testRevertBasic() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_rv_basic_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree0 = makeTreeWithFile(gd, "file.txt", "original\n")
+            val c0 = makeCommitWithTree(gd, tree0, emptyList(), "c0")
+
+            val tree1 = makeTreeWithFile(gd, "file.txt", "changed\n")
+            val c1 = makeCommitWithTree(gd, tree1, listOf(c0), "c1")
+
+            writeReference(gd, "refs/heads/main", c1)
+
+            val result = revert(gd, c1)
+            assertFalse(result.hasConflicts)
+            assertEquals(1, result.files.size)
+            assertEquals("original\n", result.files[0].second)
+            revertCleanup(gd)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testRevertConflict() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_rv_conflict_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree0 = makeTreeWithFile(gd, "file.txt", "line1\n")
+            val c0 = makeCommitWithTree(gd, tree0, emptyList(), "c0")
+
+            val tree1 = makeTreeWithFile(gd, "file.txt", "modified\n")
+            val c1 = makeCommitWithTree(gd, tree1, listOf(c0), "c1")
+
+            val treeH = makeTreeWithFile(gd, "file.txt", "further changes\n")
+            val cH = makeCommitWithTree(gd, treeH, listOf(c1), "head")
+            writeReference(gd, "refs/heads/main", cH)
+
+            val result = revert(gd, c1)
+            assertTrue(result.hasConflicts)
+            revertCleanup(gd)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    // -- Rebase Tests --
+
+    @Test
+    fun testRebaseBasic() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_rebase_basic_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree0 = makeTreeWithFile(gd, "file.txt", "base\n")
+            val c0 = makeCommitWithTree(gd, tree0, emptyList(), "base")
+
+            val tree1 = makeTreeWithFiles(gd, listOf("file.txt" to "base\n", "main.txt" to "main\n"))
+            val c1 = makeCommitWithTree(gd, tree1, listOf(c0), "main: add main.txt")
+
+            val tree2 = makeTreeWithFile(gd, "file.txt", "base\ntopic line\n")
+            val c2 = makeCommitWithTree(gd, tree2, listOf(c0), "topic: modify file")
+
+            writeReference(gd, "refs/heads/main", c1)
+
+            val rebase = Rebase.begin(gd, c2, c0, onto = c1)
+            assertEquals(1, rebase.operationCount)
+
+            val op = rebase.next()
+            assertNotNull(op)
+            val (hasConflicts, _) = rebase.applyCurrent()
+            assertFalse(hasConflicts)
+
+            val sig = Signature("Test", "test@test.com", 1000000000L, 0)
+            val newOid = rebase.commit(committer = sig)
+            assertFalse(newOid.isZero)
+
+            val nextOp = rebase.next()
+            assertNull(nextOp)
+
+            rebase.finish()
+            assertFalse(gd.resolve("rebase-merge").exists())
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testRebaseAbort() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_rebase_abort_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree0 = makeTreeWithFile(gd, "f.txt", "data\n")
+            val c0 = makeCommitWithTree(gd, tree0, emptyList(), "c0")
+
+            val tree1 = makeTreeWithFile(gd, "f.txt", "data2\n")
+            val c1 = makeCommitWithTree(gd, tree1, listOf(c0), "c1")
+
+            writeReference(gd, "refs/heads/main", c0)
+
+            val rebase = Rebase.begin(gd, c1, c0)
+            assertTrue(gd.resolve("rebase-merge").exists())
+
+            rebase.abort()
+            assertFalse(gd.resolve("rebase-merge").exists())
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testRebaseOpen() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_rebase_open_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree0 = makeTreeWithFile(gd, "f.txt", "data\n")
+            val c0 = makeCommitWithTree(gd, tree0, emptyList(), "c0")
+
+            val tree1 = makeTreeWithFile(gd, "f.txt", "more\n")
+            val c1 = makeCommitWithTree(gd, tree1, listOf(c0), "c1")
+
+            writeReference(gd, "refs/heads/main", c0)
+
+            Rebase.begin(gd, c1, c0)
+
+            val reopened = Rebase.open(gd)
+            assertEquals(1, reopened.operationCount)
+            assertEquals(c1, reopened.operations[0].id)
+
+            reopened.abort()
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
 }

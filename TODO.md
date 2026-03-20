@@ -45,9 +45,9 @@
 - [x] Merge base computation
 - [x] Three-way merge
 - [x] Merge conflict detection
-- [ ] Cherry-pick
-- [ ] Revert
-- [ ] Rebase
+- [x] Cherry-pick
+- [x] Revert
+- [x] Rebase
 
 ## Phase 6: Network
 - [x] Config file read/write

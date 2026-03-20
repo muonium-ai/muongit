@@ -30,6 +30,9 @@ pub mod fetch;
 pub mod attributes;
 pub mod filter;
 pub mod submodule;
+pub mod cherrypick;
+pub mod revert;
+pub mod rebase;
 
 pub use oid::OID;
 pub use types::{ObjectType, Signature};

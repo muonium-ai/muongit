@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:muongit}/swift",
+            "name": "Debug muongit-bench (swift)",
+            "target": "muongit-bench",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug muongit-bench (swift)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:muongit}/swift",
+            "name": "Release muongit-bench (swift)",
+            "target": "muongit-bench",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release muongit-bench (swift)"
+        }
+    ]
+}
