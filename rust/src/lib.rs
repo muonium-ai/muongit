@@ -10,6 +10,7 @@ pub mod repository;
 pub mod odb;
 pub mod object;
 pub mod patch;
+pub mod pathspec;
 pub mod refs;
 pub mod refdb;
 pub mod branch;
@@ -42,6 +43,7 @@ pub mod rebase;
 pub mod stash;
 pub mod blame;
 pub mod worktree;
+pub mod porcelain;
 
 pub use oid::OID;
 pub use types::{ObjectType, Signature};
@@ -55,6 +57,7 @@ pub use branch::{Branch, BranchType, BranchUpstream};
 pub use refdb::{RefDb, Reference};
 pub use revparse::{resolve_revision, revparse, revparse_single, RevSpec};
 pub use revwalk::{Revwalk, SORT_NONE, SORT_REVERSE, SORT_TIME, SORT_TOPOLOGICAL};
+pub use porcelain::{AddOptions, AddResult, CommitOptions, CommitResult, RemoveResult, UnstageResult};
 pub use repository::Repository;
 
 /// Library version information
