@@ -102,7 +102,7 @@ pub fn stash_save(
     let i_msg = format!("index on {}: {} {}\n", branch, short_sha, summary);
     let i_data = serialize_commit(
         &workdir_tree_oid,
-        &[head_oid.clone()],
+        std::slice::from_ref(&head_oid),
         stasher,
         stasher,
         &i_msg,
