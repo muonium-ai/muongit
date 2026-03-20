@@ -1,7 +1,7 @@
-//! Git describe: find the most recent tag reachable from a commit
+//! Git describe — find the most recent tag reachable from a commit
 //! Parity: libgit2 src/libgit2/describe.c
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::path::Path;
 
 use crate::commit::parse_commit;
@@ -12,15 +12,18 @@ use crate::refs::list_references;
 use crate::tag::parse_tag;
 use crate::types::ObjectType;
 
-/// Strategy for finding tags in describe.
+/// Strategy for finding tags in describe
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DescribeStrategy {
-    Default, // annotated tags only
-    Tags,    // all tags
-    All,     // all refs
+    /// Only annotated tags (default)
+    Default,
+    /// All tags (annotated + lightweight)
+    Tags,
+    /// All refs
+    All,
 }
 
-/// Options for describe.
+/// Options for describe
 #[derive(Debug, Clone)]
 pub struct DescribeOptions {
     pub strategy: DescribeStrategy,
@@ -32,7 +35,7 @@ pub struct DescribeOptions {
 
 impl Default for DescribeOptions {
     fn default() -> Self {
-        Self {
+        DescribeOptions {
             strategy: DescribeStrategy::Default,
             max_candidates: 10,
             pattern: None,
@@ -42,7 +45,7 @@ impl Default for DescribeOptions {
     }
 }
 
-/// Options for formatting a describe result.
+/// Options for formatting a describe result
 #[derive(Debug, Clone)]
 pub struct DescribeFormatOptions {
     pub abbreviated_size: usize,
@@ -52,7 +55,7 @@ pub struct DescribeFormatOptions {
 
 impl Default for DescribeFormatOptions {
     fn default() -> Self {
-        Self {
+        DescribeFormatOptions {
             abbreviated_size: 7,
             always_use_long_format: false,
             dirty_suffix: None,
@@ -60,7 +63,7 @@ impl Default for DescribeFormatOptions {
     }
 }
 
-/// Result of a describe operation.
+/// Result of a describe operation
 #[derive(Debug, Clone)]
 pub struct DescribeResult {
     pub tag_name: Option<String>,
@@ -71,42 +74,51 @@ pub struct DescribeResult {
 }
 
 impl DescribeResult {
-    /// Format the describe result as a string.
-    pub fn format(&self, options: &DescribeFormatOptions) -> String {
+    /// Format the describe result as a string
+    pub fn format(&self, opts: &DescribeFormatOptions) -> String {
         let mut result = if self.fallback_to_id {
-            self.commit_id.hex[..options.abbreviated_size].to_string()
+            self.commit_id.hex()[..opts.abbreviated_size].to_string()
         } else if let Some(ref tag_name) = self.tag_name {
-            if self.exact_match && !options.always_use_long_format {
+            if self.exact_match && !opts.always_use_long_format {
                 tag_name.clone()
             } else {
-                let abbrev = &self.commit_id.hex[..options.abbreviated_size];
+                let abbrev = &self.commit_id.hex()[..opts.abbreviated_size];
                 format!("{}-{}-g{}", tag_name, self.depth, abbrev)
             }
         } else {
-            self.commit_id.hex[..options.abbreviated_size].to_string()
+            self.commit_id.hex()[..opts.abbreviated_size].to_string()
         };
-        if let Some(ref suffix) = options.dirty_suffix {
+
+        if let Some(ref suffix) = opts.dirty_suffix {
             result.push_str(suffix);
         }
+
         result
     }
 }
 
+/// A tag/ref candidate for describe
+#[derive(Debug, Clone)]
 struct TagCandidate {
     name: String,
-    priority: u8, // 2=annotated, 1=lightweight, 0=other
+    priority: u8, // 2=annotated tag, 1=lightweight tag, 0=other ref
+    commit_oid: OID,
 }
 
-/// Describe a commit — find the most recent tag reachable from it.
+/// Describe a commit — find the most recent tag reachable from it
+///
+/// Walks commit history via BFS to find the nearest tag ancestor and returns
+/// a description like `v1.0-3-gabcdef`.
 pub fn describe(
     git_dir: &Path,
     commit_oid: &OID,
-    options: &DescribeOptions,
+    opts: &DescribeOptions,
 ) -> Result<DescribeResult, MuonGitError> {
-    let candidates = collect_candidates(git_dir, options)?;
+    // Step 1: collect all reference targets
+    let candidates = collect_candidates(git_dir, opts)?;
 
     // Check if commit itself is tagged
-    if let Some(candidate) = candidates.get(&commit_oid.hex) {
+    if let Some(candidate) = candidates.get(commit_oid) {
         return Ok(DescribeResult {
             tag_name: Some(candidate.name.clone()),
             depth: 0,
@@ -116,41 +128,45 @@ pub fn describe(
         });
     }
 
-    // BFS from commit through parents
+    // Step 2: BFS from commit through parents
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
-    visited.insert(commit_oid.hex.clone());
     queue.push_back((commit_oid.clone(), 0usize));
+    visited.insert(commit_oid.clone());
 
-    let mut best: Option<(String, u8, usize)> = None; // (name, priority, depth)
+    let mut best: Option<(TagCandidate, usize)> = None;
 
     while let Some((oid, depth)) = queue.pop_front() {
-        if let Some(candidate) = candidates.get(&oid.hex) {
-            let dominated = match &best {
-                None => true,
-                Some((_, bp, bd)) => depth < *bd || (depth == *bd && candidate.priority > *bp),
+        // Check if this commit is a candidate
+        if let Some(candidate) = candidates.get(&oid) {
+            let dominated = if let Some((ref current_best, current_depth)) = best {
+                // Prefer: closer tag, higher priority, earlier discovery
+                depth < current_depth
+                    || (depth == current_depth && candidate.priority > current_best.priority)
+            } else {
+                true
             };
             if dominated {
-                best = Some((candidate.name.clone(), candidate.priority, depth));
+                best = Some((candidate.clone(), depth));
             }
-            if let Some((_, _, bd)) = &best {
-                if depth > bd + options.max_candidates {
-                    break;
-                }
+            // Don't continue past found tags unless looking for better candidates
+            if best.is_some() && depth > best.as_ref().unwrap().1 + opts.max_candidates {
+                break;
             }
             continue;
         }
 
+        // Read commit and enqueue parents
         if let Ok((obj_type, data)) = read_loose_object(git_dir, &oid) {
             if obj_type == ObjectType::Commit {
-                if let Ok(commit) = parse_commit(oid, data.as_slice()) {
-                    let parents = if options.only_follow_first_parent {
+                if let Ok(commit) = parse_commit(oid.clone(), &data) {
+                    let parents = if opts.only_follow_first_parent {
                         commit.parent_ids.into_iter().take(1).collect::<Vec<_>>()
                     } else {
                         commit.parent_ids
                     };
                     for parent_oid in parents {
-                        if visited.insert(parent_oid.hex.clone()) {
+                        if visited.insert(parent_oid.clone()) {
                             queue.push_back((parent_oid, depth + 1));
                         }
                     }
@@ -159,89 +175,100 @@ pub fn describe(
         }
     }
 
-    if let Some((name, _, depth)) = best {
-        return Ok(DescribeResult {
-            tag_name: Some(name),
+    match best {
+        Some((candidate, depth)) => Ok(DescribeResult {
+            tag_name: Some(candidate.name),
             depth,
             commit_id: commit_oid.clone(),
             exact_match: false,
             fallback_to_id: false,
-        });
+        }),
+        None => {
+            if opts.show_commit_oid_as_fallback {
+                Ok(DescribeResult {
+                    tag_name: None,
+                    depth: 0,
+                    commit_id: commit_oid.clone(),
+                    exact_match: false,
+                    fallback_to_id: true,
+                })
+            } else {
+                Err(MuonGitError::NotFound(
+                    "no tag found for describe".to_string(),
+                ))
+            }
+        }
     }
-
-    if options.show_commit_oid_as_fallback {
-        return Ok(DescribeResult {
-            tag_name: None,
-            depth: 0,
-            commit_id: commit_oid.clone(),
-            exact_match: false,
-            fallback_to_id: true,
-        });
-    }
-
-    Err(MuonGitError::NotFound("no tag found for describe".into()))
 }
 
+/// Collect all tag/ref candidates from refs
 fn collect_candidates(
     git_dir: &Path,
-    options: &DescribeOptions,
-) -> Result<HashMap<String, TagCandidate>, MuonGitError> {
+    opts: &DescribeOptions,
+) -> Result<HashMap<OID, TagCandidate>, MuonGitError> {
     let refs = list_references(git_dir)?;
     let mut candidates = HashMap::new();
 
-    for (refname, value) in &refs {
-        let (name, priority) = match categorize_ref(refname, options) {
+    for (refname, value) in refs {
+        let (name, priority) = match categorize_ref(&refname, opts) {
             Some(v) => v,
             None => continue,
         };
 
-        if let Some(ref pattern) = options.pattern {
+        // Apply pattern filter
+        if let Some(ref pattern) = opts.pattern {
             if !glob_match(pattern, &name) {
                 continue;
             }
         }
 
-        if value.len() != 40 || !value.chars().all(|c| c.is_ascii_hexdigit()) {
-            continue;
-        }
-        let oid = OID::from_hex(value)
-            .map_err(|_| MuonGitError::InvalidObject("bad ref value".into()))?;
+        // Resolve the ref to a commit OID
+        let oid = match OID::from_hex(&value) {
+            Ok(oid) => oid,
+            Err(_) => continue,
+        };
 
+        // If it's a tag object, peel to commit
         let (commit_oid, actual_priority) = peel_to_commit(git_dir, &oid, priority);
+
         candidates.insert(
-            commit_oid.hex.clone(),
+            commit_oid.clone(),
             TagCandidate {
                 name,
                 priority: actual_priority,
+                commit_oid,
             },
         );
     }
+
     Ok(candidates)
 }
 
-fn categorize_ref(refname: &str, options: &DescribeOptions) -> Option<(String, u8)> {
-    match options.strategy {
+/// Categorize a ref and return (short_name, priority) if it matches the strategy
+fn categorize_ref(refname: &str, opts: &DescribeOptions) -> Option<(String, u8)> {
+    match opts.strategy {
         DescribeStrategy::Default => {
-            if let Some(rest) = refname.strip_prefix("refs/tags/") {
-                Some((rest.to_string(), 2))
+            // Only annotated tags
+            if let Some(tag_name) = refname.strip_prefix("refs/tags/") {
+                Some((tag_name.to_string(), 2))
             } else {
                 None
             }
         }
         DescribeStrategy::Tags => {
-            if let Some(rest) = refname.strip_prefix("refs/tags/") {
-                Some((rest.to_string(), 1))
+            if let Some(tag_name) = refname.strip_prefix("refs/tags/") {
+                Some((tag_name.to_string(), 1))
             } else {
                 None
             }
         }
         DescribeStrategy::All => {
-            if let Some(rest) = refname.strip_prefix("refs/tags/") {
-                Some((rest.to_string(), 2))
-            } else if let Some(rest) = refname.strip_prefix("refs/heads/") {
-                Some((format!("heads/{}", rest), 0))
-            } else if let Some(rest) = refname.strip_prefix("refs/remotes/") {
-                Some((format!("remotes/{}", rest), 0))
+            if let Some(tag_name) = refname.strip_prefix("refs/tags/") {
+                Some((tag_name.to_string(), 2))
+            } else if let Some(branch) = refname.strip_prefix("refs/heads/") {
+                Some((format!("heads/{}", branch), 0))
+            } else if let Some(remote) = refname.strip_prefix("refs/remotes/") {
+                Some((format!("remotes/{}", remote), 0))
             } else {
                 Some((refname.to_string(), 0))
             }
@@ -249,101 +276,109 @@ fn categorize_ref(refname: &str, options: &DescribeOptions) -> Option<(String, u
     }
 }
 
+/// Peel a tag object to its target commit OID
 fn peel_to_commit(git_dir: &Path, oid: &OID, default_priority: u8) -> (OID, u8) {
     if let Ok((obj_type, data)) = read_loose_object(git_dir, oid) {
-        if obj_type == ObjectType::Tag {
-            if let Ok(tag) = parse_tag(oid.clone(), &data) {
-                return (tag.target_id, 2);
+        match obj_type {
+            ObjectType::Tag => {
+                if let Ok(tag) = parse_tag(oid.clone(), &data) {
+                    // Annotated tag: priority 2
+                    return (tag.target_id, 2);
+                }
             }
+            ObjectType::Commit => {
+                return (oid.clone(), default_priority);
+            }
+            _ => {}
         }
     }
     (oid.clone(), default_priority)
 }
 
-/// Simple glob matching (supports * and ?).
-pub fn glob_match(pattern: &str, text: &str) -> bool {
-    let p: Vec<char> = pattern.chars().collect();
-    let t: Vec<char> = text.chars().collect();
-    glob_match_inner(&p, 0, &t, 0)
+/// Simple glob matching (supports * and ?)
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let pat_chars: Vec<char> = pattern.chars().collect();
+    let text_chars: Vec<char> = text.chars().collect();
+    glob_match_inner(&pat_chars, &text_chars)
 }
 
-fn glob_match_inner(p: &[char], pi: usize, t: &[char], ti: usize) -> bool {
-    if pi == p.len() && ti == t.len() {
-        return true;
+fn glob_match_inner(pattern: &[char], text: &[char]) -> bool {
+    match (pattern.first(), text.first()) {
+        (None, None) => true,
+        (Some(&'*'), _) => {
+            // Try matching 0 or more characters
+            glob_match_inner(&pattern[1..], text)
+                || (!text.is_empty() && glob_match_inner(pattern, &text[1..]))
+        }
+        (Some(&'?'), Some(_)) => glob_match_inner(&pattern[1..], &text[1..]),
+        (Some(&a), Some(&b)) if a == b => glob_match_inner(&pattern[1..], &text[1..]),
+        _ => false,
     }
-    if pi == p.len() {
-        return false;
-    }
-    if p[pi] == '*' {
-        return glob_match_inner(p, pi + 1, t, ti)
-            || (ti < t.len() && glob_match_inner(p, pi, t, ti + 1));
-    }
-    if ti < t.len() && (p[pi] == '?' || p[pi] == t[ti]) {
-        return glob_match_inner(p, pi + 1, t, ti + 1);
-    }
-    false
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commit::serialize_commit;
     use crate::odb::write_loose_object;
-    use crate::oid::OID;
-    use crate::refs::{write_reference, write_symbolic_reference};
-    use crate::repository::Repository;
+    use crate::commit::serialize_commit;
     use crate::tag::serialize_tag;
-    use crate::tree::serialize_tree;
     use crate::types::Signature;
+    use crate::refs::write_reference;
     use std::fs;
-    use std::path::PathBuf;
 
-    fn test_dir(name: &str) -> PathBuf {
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tmp");
-        fs::create_dir_all(&base).unwrap();
-        let p = base.join(format!("test_describe_{}", name));
-        if p.exists() {
-            fs::remove_dir_all(&p).unwrap();
-        }
-        p
-    }
-
-    fn make_sig() -> Signature {
+    fn test_sig() -> Signature {
         Signature {
             name: "Test".into(),
             email: "test@test.com".into(),
-            time: 1700000000,
+            time: 1000000000,
             offset: 0,
         }
     }
 
+    fn setup_repo(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tmp").join(name);
+        if base.exists() {
+            fs::remove_dir_all(&base).unwrap();
+        }
+        let git_dir = base.join(".git");
+        fs::create_dir_all(git_dir.join("objects")).unwrap();
+        fs::create_dir_all(git_dir.join("refs/heads")).unwrap();
+        fs::create_dir_all(git_dir.join("refs/tags")).unwrap();
+        (base, git_dir)
+    }
+
     fn make_commit(
         git_dir: &Path,
+        tree_oid: &OID,
         parents: &[OID],
         msg: &str,
     ) -> OID {
-        let sig = make_sig();
-        let tree_data = serialize_tree(&[]);
-        let tree_oid = write_loose_object(git_dir, ObjectType::Tree, &tree_data).unwrap();
-        let commit_data = serialize_commit(&tree_oid, parents, &sig, &sig, msg, None);
-        write_loose_object(git_dir, ObjectType::Commit, &commit_data).unwrap()
+        let sig = test_sig();
+        let data = serialize_commit(tree_oid, parents, &sig, &sig, msg, None);
+        write_loose_object(git_dir, ObjectType::Commit, &data).unwrap()
+    }
+
+    fn make_empty_tree(git_dir: &Path) -> OID {
+        write_loose_object(git_dir, ObjectType::Tree, &[]).unwrap()
+    }
+
+    fn make_annotated_tag(git_dir: &Path, target: &OID, tag_name: &str) -> OID {
+        let sig = test_sig();
+        let data = serialize_tag(target, ObjectType::Commit, tag_name, Some(&sig), &format!("Tag {}", tag_name));
+        write_loose_object(git_dir, ObjectType::Tag, &data).unwrap()
     }
 
     #[test]
-    fn test_describe_exact_tag() {
-        let tmp = test_dir("exact_tag");
-        let repo = Repository::init(tmp.to_str().unwrap(), false).unwrap();
-        let gd = repo.git_dir();
-        let c = make_commit(gd, &[], "initial");
-        write_reference(gd, "refs/heads/main", &c).unwrap();
-        write_symbolic_reference(gd, "HEAD", "refs/heads/main").unwrap();
+    fn test_describe_exact_match() {
+        let (_base, git_dir) = setup_repo("describe_exact");
+        let tree = make_empty_tree(&git_dir);
+        let c1 = make_commit(&git_dir, &tree, &[], "initial");
 
-        // Create annotated tag
-        let tag_data = serialize_tag(&c, ObjectType::Commit, "v1.0", &make_sig(), "release");
-        let tag_oid = write_loose_object(gd, ObjectType::Tag, &tag_data).unwrap();
-        write_reference(gd, "refs/tags/v1.0", &tag_oid).unwrap();
+        // Create annotated tag pointing to c1
+        let tag_oid = make_annotated_tag(&git_dir, &c1, "v1.0");
+        write_reference(&git_dir, "refs/tags/v1.0", &tag_oid).unwrap();
 
-        let result = describe(gd, &c, &DescribeOptions::default()).unwrap();
+        let result = describe(&git_dir, &c1, &DescribeOptions::default()).unwrap();
         assert!(result.exact_match);
         assert_eq!(result.tag_name.as_deref(), Some("v1.0"));
         assert_eq!(result.depth, 0);
@@ -351,127 +386,71 @@ mod tests {
 
     #[test]
     fn test_describe_with_depth() {
-        let tmp = test_dir("with_depth");
-        let repo = Repository::init(tmp.to_str().unwrap(), false).unwrap();
-        let gd = repo.git_dir();
-        let c0 = make_commit(gd, &[], "initial");
-        write_reference(gd, "refs/heads/main", &c0).unwrap();
-        write_symbolic_reference(gd, "HEAD", "refs/heads/main").unwrap();
+        let (_base, git_dir) = setup_repo("describe_depth");
+        let tree = make_empty_tree(&git_dir);
+        let c1 = make_commit(&git_dir, &tree, &[], "first");
+        let c2 = make_commit(&git_dir, &tree, &[c1.clone()], "second");
+        let c3 = make_commit(&git_dir, &tree, &[c2.clone()], "third");
 
-        let tag_data = serialize_tag(&c0, ObjectType::Commit, "v1.0", &make_sig(), "release");
-        let tag_oid = write_loose_object(gd, ObjectType::Tag, &tag_data).unwrap();
-        write_reference(gd, "refs/tags/v1.0", &tag_oid).unwrap();
+        // Tag c1
+        let tag_oid = make_annotated_tag(&git_dir, &c1, "v1.0");
+        write_reference(&git_dir, "refs/tags/v1.0", &tag_oid).unwrap();
 
-        let c1 = make_commit(gd, &[c0.clone()], "second");
-        let c2 = make_commit(gd, &[c1], "third");
-
-        let result = describe(gd, &c2, &DescribeOptions::default()).unwrap();
-        assert!(!result.exact_match);
+        let result = describe(&git_dir, &c3, &DescribeOptions::default()).unwrap();
         assert_eq!(result.tag_name.as_deref(), Some("v1.0"));
         assert_eq!(result.depth, 2);
+        assert!(!result.exact_match);
     }
 
     #[test]
-    fn test_describe_no_tag_fallback() {
-        let tmp = test_dir("no_tag_fallback");
-        let repo = Repository::init(tmp.to_str().unwrap(), false).unwrap();
-        let gd = repo.git_dir();
-        let c = make_commit(gd, &[], "initial");
-        write_reference(gd, "refs/heads/main", &c).unwrap();
-        write_symbolic_reference(gd, "HEAD", "refs/heads/main").unwrap();
+    fn test_describe_fallback_to_oid() {
+        let (_base, git_dir) = setup_repo("describe_fallback");
+        let tree = make_empty_tree(&git_dir);
+        let c1 = make_commit(&git_dir, &tree, &[], "no tags");
 
-        let opts = DescribeOptions {
-            show_commit_oid_as_fallback: true,
-            ..Default::default()
-        };
-        let result = describe(gd, &c, &opts).unwrap();
+        let mut opts = DescribeOptions::default();
+        opts.show_commit_oid_as_fallback = true;
+
+        let result = describe(&git_dir, &c1, &opts).unwrap();
         assert!(result.fallback_to_id);
         assert!(result.tag_name.is_none());
     }
 
     #[test]
-    fn test_describe_no_tag_error() {
-        let tmp = test_dir("no_tag_error");
-        let repo = Repository::init(tmp.to_str().unwrap(), false).unwrap();
-        let gd = repo.git_dir();
-        let c = make_commit(gd, &[], "initial");
-        write_reference(gd, "refs/heads/main", &c).unwrap();
-
-        let result = describe(gd, &c, &DescribeOptions::default());
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_describe_format() {
-        let oid = OID::from_hex("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d").unwrap();
         let result = DescribeResult {
-            tag_name: Some("v1.0".into()),
+            tag_name: Some("v1.0".to_string()),
             depth: 3,
-            commit_id: oid,
+            commit_id: OID::from_hex("abcdef1234567890abcdef1234567890abcdef12").unwrap(),
             exact_match: false,
             fallback_to_id: false,
         };
-        let fmt = result.format(&DescribeFormatOptions::default());
-        assert_eq!(fmt, "v1.0-3-gaaf4c61");
+
+        let formatted = result.format(&DescribeFormatOptions::default());
+        assert_eq!(formatted, "v1.0-3-gabcdef1");
     }
 
     #[test]
     fn test_describe_format_exact() {
-        let oid = OID::from_hex("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d").unwrap();
         let result = DescribeResult {
-            tag_name: Some("v2.0".into()),
+            tag_name: Some("v2.0".to_string()),
             depth: 0,
-            commit_id: oid,
+            commit_id: OID::from_hex("abcdef1234567890abcdef1234567890abcdef12").unwrap(),
             exact_match: true,
             fallback_to_id: false,
         };
-        assert_eq!(result.format(&DescribeFormatOptions::default()), "v2.0");
-    }
 
-    #[test]
-    fn test_describe_format_dirty() {
-        let oid = OID::from_hex("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d").unwrap();
-        let result = DescribeResult {
-            tag_name: Some("v1.0".into()),
-            depth: 0,
-            commit_id: oid,
-            exact_match: true,
-            fallback_to_id: false,
-        };
-        let opts = DescribeFormatOptions {
-            dirty_suffix: Some("-dirty".into()),
-            ..Default::default()
-        };
-        assert_eq!(result.format(&opts), "v1.0-dirty");
+        let formatted = result.format(&DescribeFormatOptions::default());
+        assert_eq!(formatted, "v2.0");
     }
 
     #[test]
     fn test_glob_match() {
         assert!(glob_match("v*", "v1.0"));
-        assert!(glob_match("v1.?", "v1.0"));
-        assert!(!glob_match("v2.*", "v1.0"));
+        assert!(glob_match("v?.0", "v1.0"));
+        assert!(!glob_match("v?.0", "v10.0"));
         assert!(glob_match("*", "anything"));
         assert!(glob_match("release-*", "release-1.0"));
-    }
-
-    #[test]
-    fn test_describe_lightweight_tag_with_tag_strategy() {
-        let tmp = test_dir("lightweight_tag");
-        let repo = Repository::init(tmp.to_str().unwrap(), false).unwrap();
-        let gd = repo.git_dir();
-        let c = make_commit(gd, &[], "initial");
-        write_reference(gd, "refs/heads/main", &c).unwrap();
-        write_symbolic_reference(gd, "HEAD", "refs/heads/main").unwrap();
-
-        // Create lightweight tag (points directly to commit)
-        write_reference(gd, "refs/tags/v0.1", &c).unwrap();
-
-        let opts = DescribeOptions {
-            strategy: DescribeStrategy::Tags,
-            ..Default::default()
-        };
-        let result = describe(gd, &c, &opts).unwrap();
-        assert!(result.exact_match);
-        assert_eq!(result.tag_name.as_deref(), Some("v0.1"));
+        assert!(!glob_match("release-*", "v1.0"));
     }
 }

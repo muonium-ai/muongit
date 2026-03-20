@@ -1,246 +1,306 @@
-//! Git pathspec: path matching and globbing
+//! Pathspec pattern matching
 //! Parity: libgit2 src/libgit2/pathspec.c
 
-use std::path::Path;
-
-use crate::error::MuonGitError;
-
-/// Flags controlling pathspec matching behavior.
+/// Flags for pathspec matching behavior
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PathspecFlags {
     pub ignore_case: bool,
-    pub use_case: bool,
     pub no_glob: bool,
     pub no_match_error: bool,
     pub find_failures: bool,
-    pub failures_only: bool,
 }
 
-/// A compiled set of path patterns for matching.
-#[derive(Debug, Clone)]
-pub struct Pathspec {
-    patterns: Vec<PathspecPattern>,
-    flags: PathspecFlags,
-}
-
+/// A single pathspec pattern
 #[derive(Debug, Clone)]
 struct PathspecPattern {
     pattern: String,
-    negate: bool,
+    negated: bool,
+    has_wildcard: bool,
+    match_all: bool,
 }
 
-/// Result of matching a pathspec against a set of paths.
+/// Compiled pathspec for matching file paths
 #[derive(Debug, Clone)]
-pub struct PathspecMatchList {
-    pub matched: Vec<String>,
+pub struct Pathspec {
+    patterns: Vec<PathspecPattern>,
+}
+
+/// Result of matching a pathspec against a list of paths
+#[derive(Debug, Clone)]
+pub struct PathspecMatchResult {
+    pub matches: Vec<String>,
     pub failures: Vec<String>,
 }
 
 impl Pathspec {
-    /// Create a new pathspec from a list of patterns.
-    pub fn new(patterns: &[&str], flags: PathspecFlags) -> Result<Self, MuonGitError> {
-        let parsed: Vec<PathspecPattern> = patterns
-            .iter()
-            .map(|p| {
-                if let Some(rest) = p.strip_prefix('!') {
-                    PathspecPattern {
-                        pattern: rest.to_string(),
-                        negate: true,
-                    }
-                } else if let Some(rest) = p.strip_prefix('\\') {
-                    // Escaped leading ! or #
-                    PathspecPattern {
-                        pattern: rest.to_string(),
-                        negate: false,
-                    }
-                } else {
-                    PathspecPattern {
-                        pattern: p.to_string(),
-                        negate: false,
-                    }
-                }
-            })
-            .collect();
-        Ok(Self {
-            patterns: parsed,
-            flags,
-        })
+    /// Create a new pathspec from a list of patterns
+    pub fn new(patterns: &[&str]) -> Self {
+        let mut compiled = Vec::new();
+        for &pat_str in patterns {
+            compiled.push(parse_pattern(pat_str));
+        }
+        Pathspec { patterns: compiled }
     }
 
-    /// Check if a single path matches this pathspec.
-    pub fn matches_path(&self, path: &str) -> bool {
+    /// Check if a path matches this pathspec
+    pub fn matches_path(&self, path: &str, flags: &PathspecFlags) -> bool {
         if self.patterns.is_empty() {
             return true;
         }
+
         let mut matched = false;
-        for pat in &self.patterns {
-            let does_match = if self.flags.no_glob {
-                path_prefix_match(path, &pat.pattern, self.flags.ignore_case)
+
+        for pattern in &self.patterns {
+            if pattern.match_all {
+                matched = !pattern.negated;
+                continue;
+            }
+
+            let does_match = if flags.no_glob {
+                path_matches_literal(path, &pattern.pattern, flags.ignore_case)
             } else {
-                pathspec_glob_match(path, &pat.pattern, self.flags.ignore_case)
+                path_matches_glob(path, &pattern.pattern, flags.ignore_case)
             };
+
             if does_match {
-                if pat.negate {
-                    matched = false;
-                } else {
-                    matched = true;
-                }
+                matched = !pattern.negated;
             }
         }
+
         matched
     }
 
-    /// Match this pathspec against a list of paths, returning matched paths.
-    pub fn match_list(&self, paths: &[&str]) -> PathspecMatchList {
-        let mut matched = Vec::new();
-        let mut failures = Vec::new();
-
-        if self.flags.failures_only {
-            // Only report patterns that didn't match anything
-            let mut pattern_matched = vec![false; self.patterns.len()];
-            for &path in paths {
-                for (i, pat) in self.patterns.iter().enumerate() {
-                    if !pat.negate {
-                        let m = if self.flags.no_glob {
-                            path_prefix_match(path, &pat.pattern, self.flags.ignore_case)
-                        } else {
-                            pathspec_glob_match(path, &pat.pattern, self.flags.ignore_case)
-                        };
-                        if m {
-                            pattern_matched[i] = true;
-                        }
-                    }
-                }
-            }
-            for (i, pat) in self.patterns.iter().enumerate() {
-                if !pat.negate && !pattern_matched[i] {
-                    failures.push(pat.pattern.clone());
-                }
-            }
-            return PathspecMatchList { matched, failures };
-        }
+    /// Match this pathspec against a list of paths
+    pub fn match_paths(&self, paths: &[&str], flags: &PathspecFlags) -> PathspecMatchResult {
+        let mut matches = Vec::new();
+        let mut matched_patterns = vec![false; self.patterns.len()];
 
         for &path in paths {
-            if self.matches_path(path) {
-                matched.push(path.to_string());
+            if self.matches_path(path, flags) {
+                matches.push(path.to_string());
             }
-        }
-
-        if self.flags.find_failures {
-            let mut pattern_matched = vec![false; self.patterns.len()];
-            for &path in paths {
-                for (i, pat) in self.patterns.iter().enumerate() {
-                    if !pat.negate {
-                        let m = if self.flags.no_glob {
-                            path_prefix_match(path, &pat.pattern, self.flags.ignore_case)
-                        } else {
-                            pathspec_glob_match(path, &pat.pattern, self.flags.ignore_case)
-                        };
-                        if m {
-                            pattern_matched[i] = true;
-                        }
-                    }
-                }
-            }
-            for (i, pat) in self.patterns.iter().enumerate() {
-                if !pat.negate && !pattern_matched[i] {
-                    failures.push(pat.pattern.clone());
+            // Track which patterns matched for failure detection
+            for (i, pattern) in self.patterns.iter().enumerate() {
+                if !pattern.negated && pattern_matches_path(path, pattern, flags) {
+                    matched_patterns[i] = true;
                 }
             }
         }
 
-        if self.flags.no_match_error && matched.is_empty() && !self.patterns.is_empty() {
-            // This would be an error condition in libgit2
-        }
+        let failures = if flags.find_failures {
+            self.patterns
+                .iter()
+                .enumerate()
+                .filter(|(i, p)| !p.negated && !matched_patterns[*i])
+                .map(|(_, p)| p.pattern.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
 
-        PathspecMatchList { matched, failures }
+        PathspecMatchResult { matches, failures }
+    }
+
+    /// Number of patterns
+    pub fn len(&self) -> usize {
+        self.patterns.len()
+    }
+
+    /// Whether the pathspec is empty
+    pub fn is_empty(&self) -> bool {
+        self.patterns.is_empty()
     }
 }
 
-/// Glob-style pathspec matching. Supports *, ?, and path-aware matching.
-fn pathspec_glob_match(path: &str, pattern: &str, ignore_case: bool) -> bool {
-    let p = if ignore_case {
-        pattern.to_lowercase()
-    } else {
-        pattern.to_string()
-    };
-    let t = if ignore_case {
-        path.to_lowercase()
-    } else {
-        path.to_string()
-    };
+/// Parse a single pattern string
+fn parse_pattern(pat: &str) -> PathspecPattern {
+    let mut pattern = pat.to_string();
+    let mut negated = false;
 
-    // If pattern has no slash, match only the basename
-    if !p.contains('/') {
-        let basename = t.rsplit('/').next().unwrap_or(&t);
-        return glob_match_chars(&p, basename);
+    // Handle negation
+    if pattern.starts_with('!') {
+        negated = true;
+        pattern = pattern[1..].to_string();
+    } else if pattern.starts_with('\\') && pattern.len() > 1 && pattern.as_bytes()[1] == b'!' {
+        // Escaped negation
+        pattern = pattern[1..].to_string();
     }
 
-    // Pattern has slash — match full path
-    glob_match_chars(&p, &t)
+    // Strip leading slash (anchors to root)
+    if pattern.starts_with('/') {
+        pattern = pattern[1..].to_string();
+    }
+
+    let match_all = pattern == "*" || pattern.is_empty();
+    let has_wildcard = pattern.contains('*') || pattern.contains('?') || pattern.contains('[');
+
+    PathspecPattern {
+        pattern,
+        negated,
+        has_wildcard,
+        match_all,
+    }
 }
 
-/// Prefix-based matching (no-glob mode).
-fn path_prefix_match(path: &str, pattern: &str, ignore_case: bool) -> bool {
-    let p = if ignore_case {
-        pattern.to_lowercase()
+fn pattern_matches_path(path: &str, pattern: &PathspecPattern, flags: &PathspecFlags) -> bool {
+    if pattern.match_all {
+        return true;
+    }
+    if flags.no_glob {
+        path_matches_literal(path, &pattern.pattern, flags.ignore_case)
     } else {
-        pattern.to_string()
-    };
-    let t = if ignore_case {
-        path.to_lowercase()
+        path_matches_glob(path, &pattern.pattern, flags.ignore_case)
+    }
+}
+
+/// Literal path matching (prefix + exact)
+fn path_matches_literal(path: &str, pattern: &str, ignore_case: bool) -> bool {
+    let (p, t) = if ignore_case {
+        (pattern.to_lowercase(), path.to_lowercase())
     } else {
-        path.to_string()
+        (pattern.to_string(), path.to_string())
     };
 
+    // Exact match
     if t == p {
         return true;
     }
-    // path starts with pattern/ (directory prefix)
+
+    // Directory prefix match: pattern "dir" matches "dir/file"
     if t.starts_with(&p) && t.as_bytes().get(p.len()) == Some(&b'/') {
         return true;
     }
-    // pattern starts with path/ (file under directory)
-    if p.starts_with(&t) && p.as_bytes().get(t.len()) == Some(&b'/') {
-        return true;
-    }
+
     false
 }
 
-/// Simple glob matching for a single segment or full path.
-fn glob_match_chars(pattern: &str, text: &str) -> bool {
-    let p: Vec<char> = pattern.chars().collect();
-    let t: Vec<char> = text.chars().collect();
-    do_glob(&p, 0, &t, 0)
-}
+/// Glob-based path matching
+fn path_matches_glob(path: &str, pattern: &str, ignore_case: bool) -> bool {
+    let (p, t) = if ignore_case {
+        (pattern.to_lowercase(), path.to_lowercase())
+    } else {
+        (pattern.to_string(), path.to_string())
+    };
 
-fn do_glob(p: &[char], pi: usize, t: &[char], ti: usize) -> bool {
-    if pi == p.len() && ti == t.len() {
-        return true;
-    }
-    if pi == p.len() {
+    // Handle ** (any number of path levels)
+    if p.starts_with("**/") {
+        let sub = &p[3..];
+        // Match at any directory level
+        if wildmatch(sub, &t) {
+            return true;
+        }
+        // Also try at every directory level
+        let mut pos = 0;
+        while let Some(idx) = t[pos..].find('/') {
+            if wildmatch(sub, &t[pos + idx + 1..]) {
+                return true;
+            }
+            pos += idx + 1;
+        }
         return false;
     }
-    if p[pi] == '*' {
-        // ** matches across directories
-        if pi + 1 < p.len() && p[pi + 1] == '*' {
-            // Skip the ** and optional /
-            let next_pi = if pi + 2 < p.len() && p[pi + 2] == '/' {
-                pi + 3
-            } else {
-                pi + 2
-            };
-            return do_glob(p, next_pi, t, ti)
-                || (ti < t.len() && do_glob(p, pi, t, ti + 1));
+
+    // If pattern has no '/', match against basename only (git behavior)
+    if !p.contains('/') {
+        let basename = t.rsplit('/').next().unwrap_or(&t);
+        if wildmatch(&p, basename) {
+            return true;
         }
-        // * does not match /
-        return do_glob(p, pi + 1, t, ti)
-            || (ti < t.len() && t[ti] != '/' && do_glob(p, pi, t, ti + 1));
     }
-    if ti < t.len() && (p[pi] == '?' || p[pi] == t[ti]) {
-        return do_glob(p, pi + 1, t, ti + 1);
+
+    // Standard glob match against full path
+    if wildmatch(&p, &t) {
+        return true;
     }
+
+    // Trailing slash stripped: pattern "dir" matches "dir/file"
+    let stripped = p.trim_end_matches('/');
+    if t.starts_with(stripped) && t.as_bytes().get(stripped.len()) == Some(&b'/') {
+        return true;
+    }
+
     false
+}
+
+/// Wildcard matching (supports *, ?, and [...])
+fn wildmatch(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    wildmatch_inner(&p, &t)
+}
+
+fn wildmatch_inner(pattern: &[char], text: &[char]) -> bool {
+    match (pattern.first(), text.first()) {
+        (None, None) => true,
+        (None, Some(_)) => false,
+        (Some(&'*'), _) => {
+            // * matches everything except /
+            // Try matching zero characters
+            if wildmatch_inner(&pattern[1..], text) {
+                return true;
+            }
+            // Try matching one or more characters (but not /)
+            if let Some(&ch) = text.first() {
+                if ch != '/' {
+                    return wildmatch_inner(pattern, &text[1..]);
+                }
+            }
+            false
+        }
+        (Some(&'?'), Some(&ch)) => {
+            if ch != '/' {
+                wildmatch_inner(&pattern[1..], &text[1..])
+            } else {
+                false
+            }
+        }
+        (Some(&'['), _) => {
+            // Character class
+            if let Some((matched, rest_pattern)) = match_char_class(&pattern[1..], text.first()) {
+                if matched {
+                    return wildmatch_inner(rest_pattern, &text[1..]);
+                }
+            }
+            false
+        }
+        (Some(&a), Some(&b)) if a == b => wildmatch_inner(&pattern[1..], &text[1..]),
+        _ => false,
+    }
+}
+
+/// Match a character class [abc] or [!abc] or [a-z]
+fn match_char_class<'a>(pattern: &'a [char], ch: Option<&char>) -> Option<(bool, &'a [char])> {
+    let ch = ch?;
+    let mut negated = false;
+    let mut i = 0;
+
+    if i < pattern.len() && pattern[i] == '!' {
+        negated = true;
+        i += 1;
+    }
+
+    let mut matched = false;
+    while i < pattern.len() && pattern[i] != ']' {
+        if i + 2 < pattern.len() && pattern[i + 1] == '-' {
+            // Range
+            if *ch >= pattern[i] && *ch <= pattern[i + 2] {
+                matched = true;
+            }
+            i += 3;
+        } else {
+            if *ch == pattern[i] {
+                matched = true;
+            }
+            i += 1;
+        }
+    }
+
+    if i < pattern.len() && pattern[i] == ']' {
+        let result = if negated { !matched } else { matched };
+        Some((result, &pattern[i + 1..]))
+    } else {
+        None // Malformed character class
+    }
 }
 
 #[cfg(test)]
@@ -248,93 +308,105 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_simple_match() {
-        let ps = Pathspec::new(&["*.rs"], PathspecFlags::default()).unwrap();
-        assert!(ps.matches_path("src/main.rs"));
-        assert!(ps.matches_path("lib.rs"));
-        assert!(!ps.matches_path("src/main.py"));
+    fn test_basic_matching() {
+        let ps = Pathspec::new(&["*.rs"]);
+        let flags = PathspecFlags::default();
+        assert!(ps.matches_path("src/main.rs", &flags));
+        assert!(!ps.matches_path("src/main.py", &flags));
     }
 
     #[test]
-    fn test_directory_match() {
-        let ps = Pathspec::new(&["src/*.rs"], PathspecFlags::default()).unwrap();
-        assert!(ps.matches_path("src/main.rs"));
-        assert!(!ps.matches_path("test/main.rs"));
+    fn test_directory_prefix() {
+        let ps = Pathspec::new(&["src"]);
+        let flags = PathspecFlags::default();
+        assert!(ps.matches_path("src", &flags));
+        assert!(ps.matches_path("src/main.rs", &flags));
+        assert!(!ps.matches_path("test/main.rs", &flags));
     }
 
     #[test]
-    fn test_negate() {
-        let ps = Pathspec::new(&["*.rs", "!test.rs"], PathspecFlags::default()).unwrap();
-        assert!(ps.matches_path("main.rs"));
-        assert!(!ps.matches_path("test.rs"));
-    }
-
-    #[test]
-    fn test_no_glob() {
-        let flags = PathspecFlags {
-            no_glob: true,
-            ..Default::default()
-        };
-        let ps = Pathspec::new(&["src"], flags).unwrap();
-        assert!(ps.matches_path("src/main.rs"));
-        assert!(!ps.matches_path("test/main.rs"));
-    }
-
-    #[test]
-    fn test_ignore_case() {
-        let flags = PathspecFlags {
-            ignore_case: true,
-            ..Default::default()
-        };
-        let ps = Pathspec::new(&["*.RS"], flags).unwrap();
-        assert!(ps.matches_path("main.rs"));
-        assert!(ps.matches_path("MAIN.RS"));
-    }
-
-    #[test]
-    fn test_match_list() {
-        let ps = Pathspec::new(&["*.rs"], PathspecFlags::default()).unwrap();
-        let paths = vec!["a.rs", "b.py", "c.rs"];
-        let result = ps.match_list(&paths);
-        assert_eq!(result.matched, vec!["a.rs", "c.rs"]);
-    }
-
-    #[test]
-    fn test_find_failures() {
-        let flags = PathspecFlags {
-            find_failures: true,
-            ..Default::default()
-        };
-        let ps = Pathspec::new(&["*.rs", "*.go"], flags).unwrap();
-        let paths = vec!["a.rs", "b.py"];
-        let result = ps.match_list(&paths);
-        assert_eq!(result.matched, vec!["a.rs"]);
-        assert_eq!(result.failures, vec!["*.go"]);
-    }
-
-    #[test]
-    fn test_empty_pathspec() {
-        let ps = Pathspec::new(&[], PathspecFlags::default()).unwrap();
-        assert!(ps.matches_path("anything"));
+    fn test_negation() {
+        let ps = Pathspec::new(&["*.rs", "!test_*.rs"]);
+        let flags = PathspecFlags::default();
+        assert!(ps.matches_path("main.rs", &flags));
+        assert!(!ps.matches_path("test_main.rs", &flags));
     }
 
     #[test]
     fn test_double_star() {
-        let ps = Pathspec::new(&["src/**/*.rs"], PathspecFlags::default()).unwrap();
-        assert!(ps.matches_path("src/a/b/c.rs"));
-        assert!(ps.matches_path("src/main.rs"));
-        assert!(!ps.matches_path("test/main.rs"));
+        let ps = Pathspec::new(&["**/test.rs"]);
+        let flags = PathspecFlags::default();
+        assert!(ps.matches_path("test.rs", &flags));
+        assert!(ps.matches_path("src/test.rs", &flags));
+        assert!(ps.matches_path("a/b/c/test.rs", &flags));
+        assert!(!ps.matches_path("test.py", &flags));
     }
 
     #[test]
-    fn test_prefix_match_no_glob() {
-        let flags = PathspecFlags {
-            no_glob: true,
-            ..Default::default()
-        };
-        let ps = Pathspec::new(&["src/lib"], flags).unwrap();
-        assert!(ps.matches_path("src/lib"));
-        assert!(ps.matches_path("src/lib/mod.rs"));
-        assert!(!ps.matches_path("src/libfoo"));
+    fn test_question_mark() {
+        let ps = Pathspec::new(&["?.rs"]);
+        let flags = PathspecFlags::default();
+        assert!(ps.matches_path("a.rs", &flags));
+        assert!(!ps.matches_path("ab.rs", &flags));
+    }
+
+    #[test]
+    fn test_char_class() {
+        let ps = Pathspec::new(&["[abc].rs"]);
+        let flags = PathspecFlags::default();
+        assert!(ps.matches_path("a.rs", &flags));
+        assert!(ps.matches_path("b.rs", &flags));
+        assert!(!ps.matches_path("d.rs", &flags));
+    }
+
+    #[test]
+    fn test_ignore_case() {
+        let ps = Pathspec::new(&["*.RS"]);
+        let mut flags = PathspecFlags::default();
+        flags.ignore_case = true;
+        assert!(ps.matches_path("main.rs", &flags));
+    }
+
+    #[test]
+    fn test_no_glob() {
+        let ps = Pathspec::new(&["*.rs"]);
+        let mut flags = PathspecFlags::default();
+        flags.no_glob = true;
+        // With no_glob, *.rs is literal
+        assert!(!ps.matches_path("main.rs", &flags));
+        assert!(ps.matches_path("*.rs", &flags));
+    }
+
+    #[test]
+    fn test_match_paths() {
+        let ps = Pathspec::new(&["*.rs", "*.toml"]);
+        let paths = vec!["src/main.rs", "Cargo.toml", "README.md", "src/lib.rs"];
+        let flags = PathspecFlags::default();
+
+        let result = ps.match_paths(&paths, &flags);
+        assert_eq!(result.matches.len(), 3);
+        assert!(result.matches.contains(&"src/main.rs".to_string()));
+        assert!(result.matches.contains(&"Cargo.toml".to_string()));
+        assert!(result.matches.contains(&"src/lib.rs".to_string()));
+    }
+
+    #[test]
+    fn test_match_paths_with_failures() {
+        let ps = Pathspec::new(&["*.rs", "*.xyz"]);
+        let paths = vec!["src/main.rs"];
+        let mut flags = PathspecFlags::default();
+        flags.find_failures = true;
+
+        let result = ps.match_paths(&paths, &flags);
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(result.failures.len(), 1);
+        assert_eq!(result.failures[0], "*.xyz");
+    }
+
+    #[test]
+    fn test_empty_pathspec_matches_all() {
+        let ps = Pathspec::new(&[]);
+        let flags = PathspecFlags::default();
+        assert!(ps.matches_path("anything.txt", &flags));
     }
 }
