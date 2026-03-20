@@ -3856,164 +3856,207 @@ final class MuonGitTests: XCTestCase {
         try reopened.abort()
     }
 
-    // MARK: - Blame tests
+    // MARK: - Worktree tests
 
-    func testBlameSingleCommit() throws {
-        let tmp = NSTemporaryDirectory() + "muongit_test_blame_single"
+    private func setupWorktreeRepo(_ suffix: String) throws -> (String, String, OID) {
+        let tmp = NSTemporaryDirectory() + "muongit_test_wt_\(suffix)"
         try? FileManager.default.removeItem(atPath: tmp)
-        defer { try? FileManager.default.removeItem(atPath: tmp) }
-
         let repo = try Repository.create(at: tmp)
         let gd = repo.gitDir
-
-        let tree = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "line1\nline2\nline3")
-        let c = try makeCommitWithTree(gitDir: gd, treeOid: tree, parents: [], msg: "initial")
-
+        let treeData = serializeTree(entries: [])
+        let treeOid = try writeLooseObject(gitDir: gd, type: .tree, data: treeData)
+        let c = try makeCommitWithTree(gitDir: gd, treeOid: treeOid, parents: [], msg: "initial")
         try writeReference(gitDir: gd, name: "refs/heads/main", oid: c)
         try writeSymbolicReference(gitDir: gd, name: "HEAD", target: "refs/heads/main")
-
-        let result = try blameFile(gitDir: gd, path: "file.txt")
-        XCTAssertEqual(result.lineCount, 3)
-        XCTAssertEqual(result.hunkCount, 1)
-        let hunk = result.hunkByIndex(0)!
-        XCTAssertEqual(hunk.linesInHunk, 3)
-        XCTAssertEqual(hunk.finalCommitId, c)
-        XCTAssertEqual(hunk.finalStartLineNumber, 1)
+        return (tmp, gd, c)
     }
 
-    func testBlameTwoCommits() throws {
-        let tmp = NSTemporaryDirectory() + "muongit_test_blame_two"
-        try? FileManager.default.removeItem(atPath: tmp)
+    func testWorktreeListEmpty() throws {
+        let (tmp, gd, _) = try setupWorktreeRepo("list_empty")
         defer { try? FileManager.default.removeItem(atPath: tmp) }
 
-        let repo = try Repository.create(at: tmp)
-        let gd = repo.gitDir
-
-        let tree1 = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "line1\nline2")
-        let c1 = try makeCommitWithTree(gitDir: gd, treeOid: tree1, parents: [], msg: "first")
-
-        let tree2 = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "line1\ninserted\nline2")
-        let c2 = try makeCommitWithTree(gitDir: gd, treeOid: tree2, parents: [c1], msg: "second")
-
-        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c2)
-        try writeSymbolicReference(gitDir: gd, name: "HEAD", target: "refs/heads/main")
-
-        let result = try blameFile(gitDir: gd, path: "file.txt")
-        XCTAssertEqual(result.lineCount, 3)
-
-        let h1 = result.hunkByLine(1)!
-        XCTAssertEqual(h1.finalCommitId, c1)
-
-        let h2 = result.hunkByLine(2)!
-        XCTAssertEqual(h2.finalCommitId, c2)
-
-        let h3 = result.hunkByLine(3)!
-        XCTAssertEqual(h3.finalCommitId, c1)
+        let names = try worktreeList(gitDir: gd)
+        XCTAssertTrue(names.isEmpty)
     }
 
-    func testBlameLineRange() throws {
-        let tmp = NSTemporaryDirectory() + "muongit_test_blame_range"
-        try? FileManager.default.removeItem(atPath: tmp)
+    func testWorktreeAddAndList() throws {
+        let (tmp, gd, _) = try setupWorktreeRepo("add_list")
         defer { try? FileManager.default.removeItem(atPath: tmp) }
 
-        let repo = try Repository.create(at: tmp)
-        let gd = repo.gitDir
+        let wtPath = tmp + "_wt_feature"
+        defer { try? FileManager.default.removeItem(atPath: wtPath) }
 
-        let tree = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "a\nb\nc\nd\ne")
-        let c = try makeCommitWithTree(gitDir: gd, treeOid: tree, parents: [], msg: "init")
+        let wt = try worktreeAdd(gitDir: gd, name: "feature", worktreePath: wtPath)
+        XCTAssertEqual(wt.name, "feature")
+        XCTAssertFalse(wt.locked)
 
-        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c)
-        try writeSymbolicReference(gitDir: gd, name: "HEAD", target: "refs/heads/main")
-
-        let opts = BlameOptions(minLine: 2, maxLine: 4)
-        let result = try blameFile(gitDir: gd, path: "file.txt", options: opts)
-        XCTAssertEqual(result.lineCount, 5)
-        let totalBlamed = result.hunks.reduce(0) { $0 + $1.linesInHunk }
-        XCTAssertEqual(totalBlamed, 3)
+        let names = try worktreeList(gitDir: gd)
+        XCTAssertEqual(names, ["feature"])
     }
 
-    func testBlameHunkByLine() throws {
-        let tmp = NSTemporaryDirectory() + "muongit_test_blame_hbl"
-        try? FileManager.default.removeItem(atPath: tmp)
+    func testWorktreeLookup() throws {
+        let (tmp, gd, _) = try setupWorktreeRepo("lookup")
         defer { try? FileManager.default.removeItem(atPath: tmp) }
 
-        let repo = try Repository.create(at: tmp)
-        let gd = repo.gitDir
+        let wtPath = tmp + "_wt_lookup"
+        defer { try? FileManager.default.removeItem(atPath: wtPath) }
 
-        let tree = try makeTreeWithFile(gitDir: gd, name: "test.txt", content: "hello\nworld")
-        let c = try makeCommitWithTree(gitDir: gd, treeOid: tree, parents: [], msg: "init")
-
-        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c)
-        try writeSymbolicReference(gitDir: gd, name: "HEAD", target: "refs/heads/main")
-
-        let result = try blameFile(gitDir: gd, path: "test.txt")
-        XCTAssertNil(result.hunkByLine(0))
-        XCTAssertNotNil(result.hunkByLine(1))
-        XCTAssertNotNil(result.hunkByLine(2))
-        XCTAssertNil(result.hunkByLine(3))
+        try worktreeAdd(gitDir: gd, name: "mylookup", worktreePath: wtPath)
+        let wt = try worktreeLookup(gitDir: gd, name: "mylookup")
+        XCTAssertEqual(wt.name, "mylookup")
+        XCTAssertFalse(wt.locked)
     }
 
-    func testBlameEmptyFile() throws {
-        let tmp = NSTemporaryDirectory() + "muongit_test_blame_empty"
-        try? FileManager.default.removeItem(atPath: tmp)
+    func testWorktreeLookupNotFound() throws {
+        let (tmp, gd, _) = try setupWorktreeRepo("lookup_nf")
         defer { try? FileManager.default.removeItem(atPath: tmp) }
 
-        let repo = try Repository.create(at: tmp)
-        let gd = repo.gitDir
-
-        let tree = try makeTreeWithFile(gitDir: gd, name: "empty.txt", content: "")
-        let c = try makeCommitWithTree(gitDir: gd, treeOid: tree, parents: [], msg: "empty")
-
-        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c)
-        try writeSymbolicReference(gitDir: gd, name: "HEAD", target: "refs/heads/main")
-
-        let result = try blameFile(gitDir: gd, path: "empty.txt")
-        XCTAssertEqual(result.lineCount, 0)
-        XCTAssertEqual(result.hunkCount, 0)
+        XCTAssertThrowsError(try worktreeLookup(gitDir: gd, name: "nope"))
     }
 
-    func testBlameSubdirectory() throws {
-        let tmp = NSTemporaryDirectory() + "muongit_test_blame_subdir"
-        try? FileManager.default.removeItem(atPath: tmp)
+    func testWorktreeValidate() throws {
+        let (tmp, gd, _) = try setupWorktreeRepo("validate")
         defer { try? FileManager.default.removeItem(atPath: tmp) }
 
-        let repo = try Repository.create(at: tmp)
-        let gd = repo.gitDir
+        let wtPath = tmp + "_wt_validate"
+        defer { try? FileManager.default.removeItem(atPath: wtPath) }
 
-        let blobOid = try writeLooseObject(gitDir: gd, type: .blob, data: Data("nested content".utf8))
-        let innerEntry = TreeEntry(mode: FileMode.blob.rawValue, name: "deep.txt", oid: blobOid)
-        let innerTreeData = serializeTree(entries: [innerEntry])
-        let innerTree = try writeLooseObject(gitDir: gd, type: .tree, data: innerTreeData)
-
-        let outerEntry = TreeEntry(mode: FileMode.tree.rawValue, name: "subdir", oid: innerTree)
-        let outerTreeData = serializeTree(entries: [outerEntry])
-        let outerTree = try writeLooseObject(gitDir: gd, type: .tree, data: outerTreeData)
-
-        let c = try makeCommitWithTree(gitDir: gd, treeOid: outerTree, parents: [], msg: "nested")
-
-        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c)
-        try writeSymbolicReference(gitDir: gd, name: "HEAD", target: "refs/heads/main")
-
-        let result = try blameFile(gitDir: gd, path: "subdir/deep.txt")
-        XCTAssertEqual(result.lineCount, 1)
-        XCTAssertEqual(result.hunkCount, 1)
-        XCTAssertEqual(result.hunks[0].finalCommitId, c)
+        let wt = try worktreeAdd(gitDir: gd, name: "val", worktreePath: wtPath)
+        XCTAssertNoThrow(try worktreeValidate(worktree: wt))
     }
 
-    func testBlameFileNotFound() throws {
-        let tmp = NSTemporaryDirectory() + "muongit_test_blame_nf"
-        try? FileManager.default.removeItem(atPath: tmp)
+    func testWorktreeAddDuplicate() throws {
+        let (tmp, gd, _) = try setupWorktreeRepo("dup")
         defer { try? FileManager.default.removeItem(atPath: tmp) }
 
-        let repo = try Repository.create(at: tmp)
-        let gd = repo.gitDir
+        let wtPath = tmp + "_wt_dup"
+        defer { try? FileManager.default.removeItem(atPath: wtPath) }
 
-        let tree = try makeTreeWithFile(gitDir: gd, name: "exists.txt", content: "content")
-        let c = try makeCommitWithTree(gitDir: gd, treeOid: tree, parents: [], msg: "init")
+        try worktreeAdd(gitDir: gd, name: "dup", worktreePath: wtPath)
+        XCTAssertThrowsError(try worktreeAdd(gitDir: gd, name: "dup", worktreePath: wtPath))
+    }
 
-        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c)
-        try writeSymbolicReference(gitDir: gd, name: "HEAD", target: "refs/heads/main")
+    func testWorktreeAddWithLock() throws {
+        let (tmp, gd, _) = try setupWorktreeRepo("add_lock")
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
 
-        XCTAssertThrowsError(try blameFile(gitDir: gd, path: "nonexistent.txt"))
+        let wtPath = tmp + "_wt_locked"
+        defer { try? FileManager.default.removeItem(atPath: wtPath) }
+
+        let opts = WorktreeAddOptions(lock: true)
+        let wt = try worktreeAdd(gitDir: gd, name: "locked", worktreePath: wtPath, options: opts)
+        XCTAssertTrue(wt.locked)
+    }
+
+    func testWorktreeAddWithReference() throws {
+        let (tmp, gd, headOid) = try setupWorktreeRepo("add_ref")
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let wtPath = tmp + "_wt_ref"
+        defer { try? FileManager.default.removeItem(atPath: wtPath) }
+
+        try writeReference(gitDir: gd, name: "refs/heads/mybranch", oid: headOid)
+        let opts = WorktreeAddOptions(reference: "refs/heads/mybranch")
+        let wt = try worktreeAdd(gitDir: gd, name: "myref", worktreePath: wtPath, options: opts)
+        XCTAssertEqual(wt.name, "myref")
+
+        let head = try String(contentsOfFile: gd + "/worktrees/myref/HEAD", encoding: .utf8)
+        XCTAssertEqual(head.trimmingCharacters(in: .whitespacesAndNewlines), "ref: refs/heads/mybranch")
+    }
+
+    func testWorktreeLockUnlock() throws {
+        let (tmp, gd, _) = try setupWorktreeRepo("lock_unlock")
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let wtPath = tmp + "_wt_lu"
+        defer { try? FileManager.default.removeItem(atPath: wtPath) }
+
+        try worktreeAdd(gitDir: gd, name: "lu", worktreePath: wtPath)
+
+        XCTAssertNil(try worktreeIsLocked(gitDir: gd, name: "lu"))
+
+        try worktreeLock(gitDir: gd, name: "lu", reason: "maintenance")
+        XCTAssertEqual(try worktreeIsLocked(gitDir: gd, name: "lu"), "maintenance")
+
+        XCTAssertThrowsError(try worktreeLock(gitDir: gd, name: "lu"))
+
+        let wasLocked = try worktreeUnlock(gitDir: gd, name: "lu")
+        XCTAssertTrue(wasLocked)
+
+        let wasLocked2 = try worktreeUnlock(gitDir: gd, name: "lu")
+        XCTAssertFalse(wasLocked2)
+    }
+
+    func testWorktreeIsPrunable() throws {
+        let (tmp, gd, _) = try setupWorktreeRepo("prunable")
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let wtPath = tmp + "_wt_prunable"
+        defer { try? FileManager.default.removeItem(atPath: wtPath) }
+
+        try worktreeAdd(gitDir: gd, name: "pr", worktreePath: wtPath)
+
+        XCTAssertFalse(try worktreeIsPrunable(gitDir: gd, name: "pr"))
+
+        XCTAssertTrue(try worktreeIsPrunable(gitDir: gd, name: "pr",
+            options: WorktreePruneOptions(valid: true)))
+
+        try worktreeLock(gitDir: gd, name: "pr")
+        XCTAssertFalse(try worktreeIsPrunable(gitDir: gd, name: "pr",
+            options: WorktreePruneOptions(valid: true)))
+
+        XCTAssertTrue(try worktreeIsPrunable(gitDir: gd, name: "pr",
+            options: WorktreePruneOptions(valid: true, locked: true)))
+    }
+
+    func testWorktreePrune() throws {
+        let (tmp, gd, _) = try setupWorktreeRepo("prune")
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let wtPath = tmp + "_wt_prune"
+
+        try worktreeAdd(gitDir: gd, name: "tobepruned", worktreePath: wtPath)
+
+        XCTAssertThrowsError(try worktreePrune(gitDir: gd, name: "tobepruned"))
+
+        try worktreePrune(gitDir: gd, name: "tobepruned",
+            options: WorktreePruneOptions(valid: true, workingTree: true))
+
+        let names = try worktreeList(gitDir: gd)
+        XCTAssertTrue(names.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: wtPath))
+    }
+
+    func testWorktreePruneLockedFails() throws {
+        let (tmp, gd, _) = try setupWorktreeRepo("prune_locked")
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let wtPath = tmp + "_wt_prune_locked"
+        defer { try? FileManager.default.removeItem(atPath: wtPath) }
+
+        try worktreeAdd(gitDir: gd, name: "plk", worktreePath: wtPath)
+        try worktreeLock(gitDir: gd, name: "plk", reason: "keep")
+
+        XCTAssertThrowsError(try worktreePrune(gitDir: gd, name: "plk",
+            options: WorktreePruneOptions(valid: true)))
+    }
+
+    func testWorktreeGitlinkStructure() throws {
+        let (tmp, gd, _) = try setupWorktreeRepo("gitlink")
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let wtPath = tmp + "_wt_gitlink"
+        defer { try? FileManager.default.removeItem(atPath: wtPath) }
+
+        let wt = try worktreeAdd(gitDir: gd, name: "gl", worktreePath: wtPath)
+
+        let gitlink = try String(contentsOfFile: wt.path + "/.git", encoding: .utf8)
+        XCTAssertTrue(gitlink.hasPrefix("gitdir: "))
+
+        let commondir = try String(contentsOfFile: gd + "/worktrees/gl/commondir", encoding: .utf8)
+        XCTAssertEqual(commondir.trimmingCharacters(in: .whitespacesAndNewlines), "../..")
+
+        let head = try String(contentsOfFile: gd + "/worktrees/gl/HEAD", encoding: .utf8)
+        XCTAssertTrue(head.hasPrefix("ref: refs/heads/"))
     }
 }
