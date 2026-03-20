@@ -4,12 +4,19 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-RESULTS_DIR="$REPO_ROOT/benchmarks/results"
-mkdir -p "$RESULTS_DIR"
+RUNS_DIR="$REPO_ROOT/benchmarks/runs"
+TIMESTAMP="$(date -u +%Y%m%d_%H%M%S)"
+RUN_DIR="$RUNS_DIR/$TIMESTAMP"
+RESULTS_DIR="$RUN_DIR/results"
+REPORTS_DIR="$RUN_DIR/reports"
+REPORT_PATH="$REPORTS_DIR/report.md"
+MERGED_RESULTS_PATH="$RESULTS_DIR/all.jsonl"
 
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+mkdir -p "$RESULTS_DIR" "$REPORTS_DIR"
 
 echo "=== MuonGit Benchmark Suite ==="
+echo ""
+echo "Run directory: $RUN_DIR"
 echo ""
 
 # libgit2 (C baseline)
@@ -55,7 +62,7 @@ echo "  -> $RESULTS_DIR/kotlin.jsonl"
 
 # Merge all results
 cat "$RESULTS_DIR/libgit2.jsonl" "$RESULTS_DIR/rust.jsonl" "$RESULTS_DIR/swift.jsonl" "$RESULTS_DIR/kotlin.jsonl" \
-    > "$RESULTS_DIR/all_${TIMESTAMP}.jsonl"
+    > "$MERGED_RESULTS_PATH"
 
 # Generate comparison report
 echo ""
@@ -102,10 +109,13 @@ for op in ops:
 " 2>/dev/null || echo "(python3 required for comparison table)"
 
 echo ""
-echo "Results saved to: \$RESULTS_DIR/all_\${TIMESTAMP}.jsonl"
+echo "Results saved to: $MERGED_RESULTS_PATH"
 
 # Generate Markdown report
 echo ""
 echo "Generating Markdown report..."
-python3 "$REPO_ROOT/benchmarks/generate-report.py"
+python3 "$REPO_ROOT/benchmarks/generate-report.py" \
+    --results-dir "$RESULTS_DIR" \
+    --output "$REPORT_PATH" \
+    --timestamp "$TIMESTAMP"
 echo "Done."

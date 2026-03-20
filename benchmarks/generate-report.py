@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generate a human-readable Markdown benchmark comparison report."""
 
+import argparse
 import json
 import os
 import platform
@@ -288,14 +289,45 @@ def generate_report(results, machine_info, timestamp):
     return "\n".join(lines)
 
 
+def parse_args():
+    """Parse CLI arguments."""
+    parser = argparse.ArgumentParser(
+        description="Generate a benchmark report from one run directory."
+    )
+    parser.add_argument(
+        "--results-dir",
+        required=True,
+        help="Directory containing per-language JSONL benchmark results.",
+    )
+    parser.add_argument(
+        "--output",
+        required=True,
+        help="Output path for the generated Markdown report.",
+    )
+    parser.add_argument(
+        "--timestamp",
+        help="UTC timestamp for the run in YYYYMMDD_HHMMSS format.",
+    )
+    return parser.parse_args()
+
+
+def parse_timestamp(raw_timestamp):
+    """Parse a benchmark run timestamp."""
+    if raw_timestamp is None:
+        return datetime.now(timezone.utc)
+    return datetime.strptime(raw_timestamp, "%Y%m%d_%H%M%S").replace(
+        tzinfo=timezone.utc
+    )
+
+
 def main():
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    results_dir = os.path.join(repo_root, "benchmarks", "results")
-    reports_dir = os.path.join(repo_root, "benchmarks", "reports")
+    args = parse_args()
+    results_dir = os.path.abspath(args.results_dir)
+    output_path = os.path.abspath(args.output)
 
-    os.makedirs(reports_dir, exist_ok=True)
-
-    timestamp = datetime.now(timezone.utc)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    timestamp = parse_timestamp(args.timestamp)
 
     results = load_results(results_dir)
     if not results:
@@ -305,19 +337,12 @@ def main():
     machine_info = get_machine_info()
     report = generate_report(results, machine_info, timestamp)
 
-    # Write timestamped report
-    filename = f"report_{timestamp.strftime('%Y%m%d_%H%M%S')}.md"
-    filepath = os.path.join(reports_dir, filename)
-    with open(filepath, "w") as f:
+    with open(output_path, "w") as f:
         f.write(report)
 
-    # Also write latest.md as a stable reference
-    latest_path = os.path.join(reports_dir, "latest.md")
-    with open(latest_path, "w") as f:
-        f.write(report)
-
-    print(f"Report saved to: {filepath}")
-    print(f"Latest report:   {latest_path}")
+    rel_output_path = os.path.relpath(output_path, repo_root)
+    print(f"Report saved to: {output_path}")
+    print(f"Relative path:   {rel_output_path}")
 
     # Print to stdout too
     print()
