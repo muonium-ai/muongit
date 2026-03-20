@@ -47,6 +47,21 @@ make -C kotlin check-parity
 make -C rust check-parity
 ```
 
+## CLI
+
+The blessed user-facing CLI is the Rust `muongit` binary.
+
+```bash
+# install
+cargo install --path rust --bin muongit
+
+# run without installing
+cargo run --manifest-path rust/Cargo.toml --bin muongit -- status
+```
+
+The command surface, exit codes, authentication environment variables, and
+known gaps are documented in [docs/cli.md](docs/cli.md).
+
 ## libgit2 API Modules
 
 The following core modules are targeted for parity (68 public APIs):
