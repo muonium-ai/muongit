@@ -13,6 +13,8 @@ pub mod patch;
 pub mod refs;
 pub mod refdb;
 pub mod branch;
+pub mod revparse;
+pub mod revwalk;
 pub mod commit;
 pub mod tree;
 pub mod blob;
@@ -51,6 +53,8 @@ pub use patch::{
 };
 pub use branch::{Branch, BranchType, BranchUpstream};
 pub use refdb::{RefDb, Reference};
+pub use revparse::{resolve_revision, revparse, revparse_single, RevSpec};
+pub use revwalk::{Revwalk, SORT_NONE, SORT_REVERSE, SORT_TIME, SORT_TOPOLOGICAL};
 pub use repository::Repository;
 
 /// Library version information
