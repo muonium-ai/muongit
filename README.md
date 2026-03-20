@@ -81,6 +81,9 @@ That workflow:
 When the matrix fails, it reports the writer implementation, checkpoint, and
 reader implementation that disagreed.
 
+The current product-readiness summary by user workflow lives in
+[docs/user-workflow-gap-matrix.md](docs/user-workflow-gap-matrix.md).
+
 ## libgit2 API Modules
 
 The following core modules are targeted for parity (68 public APIs):
