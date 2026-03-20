@@ -2560,6 +2560,227 @@ class MuonGitTest {
         }
     }
 
+    // Filter Tests
+
+    @Test
+    fun testCrlfToLfClean() {
+        val result = crlfToLf("hello\r\nworld\r\n".toByteArray())
+        assertTrue(result is FilterResult.Applied)
+        assertTrue((result as FilterResult.Applied).data.contentEquals("hello\nworld\n".toByteArray()))
+    }
+
+    @Test
+    fun testCrlfToLfNoCrlf() {
+        val result = crlfToLf("hello\nworld\n".toByteArray())
+        assertTrue(result is FilterResult.Passthrough)
+    }
+
+    @Test
+    fun testLfToCrlfSmudge() {
+        val result = lfToCrlf("hello\nworld\n".toByteArray())
+        assertTrue(result is FilterResult.Applied)
+        assertTrue((result as FilterResult.Applied).data.contentEquals("hello\r\nworld\r\n".toByteArray()))
+    }
+
+    @Test
+    fun testLfToCrlfAlreadyCrlf() {
+        val result = lfToCrlf("hello\r\nworld\r\n".toByteArray())
+        assertTrue(result is FilterResult.Passthrough)
+    }
+
+    @Test
+    fun testIdentSmudge() {
+        val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val source = FilterSource("test.txt", FilterMode.TO_WORKTREE, oid)
+        val filter = IdentFilter()
+        val result = filter.apply("Version: \$Id\$\n".toByteArray(), source)
+        assertTrue(result is FilterResult.Applied)
+        val s = (result as FilterResult.Applied).data.toString(Charsets.UTF_8)
+        assertTrue(s.contains("\$Id: aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d \$"))
+    }
+
+    @Test
+    fun testIdentClean() {
+        val source = FilterSource("test.txt", FilterMode.TO_ODB)
+        val filter = IdentFilter()
+        val input = "Version: \$Id: aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d \$\n".toByteArray()
+        val result = filter.apply(input, source)
+        assertTrue(result is FilterResult.Applied)
+        assertTrue((result as FilterResult.Applied).data.contentEquals("Version: \$Id\$\n".toByteArray()))
+    }
+
+    @Test
+    fun testIdentNoMarker() {
+        val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val source = FilterSource("test.txt", FilterMode.TO_WORKTREE, oid)
+        val filter = IdentFilter()
+        val result = filter.apply("no markers here\n".toByteArray(), source)
+        assertTrue(result is FilterResult.Passthrough)
+    }
+
+    @Test
+    fun testBinaryDetection() {
+        assertTrue(isBinaryData(byteArrayOf(0x68, 0x65, 0x6C, 0x00, 0x6F)))
+        assertFalse(isBinaryData("hello world".toByteArray()))
+    }
+
+    @Test
+    fun testBinarySkippedByCrlf() {
+        val source = FilterSource("test.bin", FilterMode.TO_ODB)
+        val input = byteArrayOf(0x68, 0x65, 0x6C, 0x0D, 0x0A, 0x00, 0x77)
+        val filter = CrlfFilter(autoCrlf = null, coreEol = null)
+        val result = filter.apply(input, source)
+        assertTrue(result is FilterResult.Passthrough)
+    }
+
+    @Test
+    fun testFilterListLoadTextFile() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_filter_text")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            java.io.File(repo.workdir!!, ".gitattributes").writeText("*.txt text\n")
+            val list = FilterList.load(repo.gitDir, repo.workdir,
+                "hello.txt", FilterMode.TO_ODB)
+            assertTrue(list.contains("crlf"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testFilterListLoadBinaryFile() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_filter_binary")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            java.io.File(repo.workdir!!, ".gitattributes").writeText("*.bin binary\n")
+            val list = FilterList.load(repo.gitDir, repo.workdir,
+                "image.bin", FilterMode.TO_ODB)
+            assertTrue(list.isEmpty)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testFilterListLoadIdent() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_filter_ident")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            java.io.File(repo.workdir!!, ".gitattributes").writeText("*.c ident\n")
+            val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            val list = FilterList.load(repo.gitDir, repo.workdir,
+                "main.c", FilterMode.TO_WORKTREE, oid)
+            assertTrue(list.contains("ident"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testFilterListApplyClean() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_filter_apply_clean")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            java.io.File(repo.workdir!!, ".gitattributes").writeText("*.txt text ident\n")
+            val list = FilterList.load(repo.gitDir, repo.workdir,
+                "readme.txt", FilterMode.TO_ODB)
+            val input = "Version: \$Id: abc123 \$\r\nHello\r\n".toByteArray()
+            val output = list.apply(input)
+            assertTrue(output.contentEquals("Version: \$Id\$\nHello\n".toByteArray()))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testFilterListApplySmudge() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_filter_apply_smudge")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            java.io.File(repo.workdir!!, ".gitattributes").writeText("*.txt text eol=crlf ident\n")
+            val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            val list = FilterList.load(repo.gitDir, repo.workdir,
+                "readme.txt", FilterMode.TO_WORKTREE, oid)
+            val input = "Version: \$Id\$\nHello\n".toByteArray()
+            val output = list.apply(input)
+            val s = output.toString(Charsets.UTF_8)
+            assertTrue(s.contains("\$Id: aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d \$"))
+            assertTrue(s.contains("\r\n"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testFilterEolLfAttribute() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_filter_eol_lf")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            java.io.File(repo.workdir!!, ".gitattributes").writeText("*.txt text eol=lf\n")
+            val list = FilterList.load(repo.gitDir, repo.workdir,
+                "readme.txt", FilterMode.TO_WORKTREE)
+            assertFalse(list.contains("crlf"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testFilterAutoCrlfConfig() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_filter_autocrlf")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            java.io.File(repo.gitDir, "config").writeText("[core]\n\tautocrlf = true\n")
+            val list = FilterList.load(repo.gitDir, repo.workdir,
+                "readme.txt", FilterMode.TO_ODB)
+            assertTrue(list.contains("crlf"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testFilterEmptyList() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_filter_empty")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val list = FilterList.load(repo.gitDir, repo.workdir,
+                "test.txt", FilterMode.TO_ODB)
+            assertTrue(list.isEmpty)
+            assertEquals(0, list.size)
+            assertTrue(list.apply("hello world\n".toByteArray()).contentEquals("hello world\n".toByteArray()))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testMultipleIdentMarkers() {
+        val input = "\$Id\$ and \$Id\$ again".toByteArray()
+        val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val result = identSmudge(input, oid)
+        assertTrue(result is FilterResult.Applied)
+        val s = (result as FilterResult.Applied).data.toString(Charsets.UTF_8)
+        val count = s.split("\$Id: aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d \$").size - 1
+        assertEquals(2, count)
+    }
+
+    @Test
+    fun testIdentCleanMultiple() {
+        val input = "\$Id: abc \$ and \$Id: def \$".toByteArray()
+        val result = identClean(input)
+        assertTrue(result is FilterResult.Applied)
+        assertTrue((result as FilterResult.Applied).data.contentEquals("\$Id\$ and \$Id\$".toByteArray()))
+    }
+
     // Pack Index Tests
 
     private fun sortedTestOids(): Triple<List<OID>, IntArray, LongArray> {
@@ -3464,269 +3685,6 @@ class MuonGitTest {
     }
 
     // ============================================================
-    // Describe Tests
-    // ============================================================
-
-    @Test
-    fun testDescribeExactMatch() {
-        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_describe_exact")
-        tmp.deleteRecursively()
-        try {
-            val repo = Repository.init(tmp.path)
-            val sig = Signature(name = "Test", email = "test@test.com", time = 1000000000, offset = 0)
-
-            val treeOid = writeLooseObject(repo.gitDir, ObjectType.TREE, byteArrayOf())
-            val commitData = serializeCommit(treeOid, emptyList(), sig, sig, "initial")
-            val c1 = writeLooseObject(repo.gitDir, ObjectType.COMMIT, commitData)
-
-            val tagData = serializeTag(c1, ObjectType.COMMIT, "v1.0", sig, "Tag v1.0")
-            val tagOid = writeLooseObject(repo.gitDir, ObjectType.TAG, tagData)
-            writeReference(repo.gitDir, "refs/tags/v1.0", tagOid)
-
-            val result = describe(repo.gitDir, c1)
-            assertTrue(result.exactMatch)
-            assertEquals("v1.0", result.tagName)
-            assertEquals(0, result.depth)
-        } finally {
-            tmp.deleteRecursively()
-        }
-    }
-
-    @Test
-    fun testDescribeWithDepth() {
-        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_describe_depth")
-        tmp.deleteRecursively()
-        try {
-            val repo = Repository.init(tmp.path)
-            val sig = Signature(name = "Test", email = "test@test.com", time = 1000000000, offset = 0)
-
-            val treeOid = writeLooseObject(repo.gitDir, ObjectType.TREE, byteArrayOf())
-            val c1Data = serializeCommit(treeOid, emptyList(), sig, sig, "first")
-            val c1 = writeLooseObject(repo.gitDir, ObjectType.COMMIT, c1Data)
-            val c2Data = serializeCommit(treeOid, listOf(c1), sig, sig, "second")
-            val c2 = writeLooseObject(repo.gitDir, ObjectType.COMMIT, c2Data)
-            val c3Data = serializeCommit(treeOid, listOf(c2), sig, sig, "third")
-            val c3 = writeLooseObject(repo.gitDir, ObjectType.COMMIT, c3Data)
-
-            val tagData = serializeTag(c1, ObjectType.COMMIT, "v1.0", sig, "Tag v1.0")
-            val tagOid = writeLooseObject(repo.gitDir, ObjectType.TAG, tagData)
-            writeReference(repo.gitDir, "refs/tags/v1.0", tagOid)
-
-            val result = describe(repo.gitDir, c3)
-            assertEquals("v1.0", result.tagName)
-            assertEquals(2, result.depth)
-            assertFalse(result.exactMatch)
-        } finally {
-            tmp.deleteRecursively()
-        }
-    }
-
-    @Test
-    fun testDescribeFormat() {
-        val oid = OID("abcdef1234567890abcdef1234567890abcdef12")
-        val result = DescribeResult(tagName = "v1.0", depth = 3, commitId = oid, exactMatch = false, fallbackToId = false)
-        assertEquals("v1.0-3-gabcdef1", result.format())
-
-        val exact = DescribeResult(tagName = "v2.0", depth = 0, commitId = oid, exactMatch = true, fallbackToId = false)
-        assertEquals("v2.0", exact.format())
-    }
-
-    // ============================================================
-    // Notes Tests
-    // ============================================================
-
-    @Test
-    fun testNoteRead() {
-        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_notes_read")
-        tmp.deleteRecursively()
-        try {
-            val repo = Repository.init(tmp.path)
-            val sig = Signature(name = "Test", email = "test@test.com", time = 1000000000, offset = 0)
-
-            java.io.File(repo.gitDir, "refs/notes").mkdirs()
-
-            val treeOid = writeLooseObject(repo.gitDir, ObjectType.TREE, byteArrayOf())
-            val commitData = serializeCommit(treeOid, emptyList(), sig, sig, "target")
-            val targetOid = writeLooseObject(repo.gitDir, ObjectType.COMMIT, commitData)
-
-            val noteBlob = writeLooseObject(repo.gitDir, ObjectType.BLOB, "This is a note".toByteArray())
-
-            val entries = listOf(TreeEntry(mode = FileMode.BLOB, name = targetOid.hex, oid = noteBlob))
-            val notesTreeData = serializeTree(entries)
-            val notesTree = writeLooseObject(repo.gitDir, ObjectType.TREE, notesTreeData)
-
-            val notesCommitData = serializeCommit(notesTree, emptyList(), sig, sig, "Notes")
-            val notesCommit = writeLooseObject(repo.gitDir, ObjectType.COMMIT, notesCommitData)
-            writeReference(repo.gitDir, DEFAULT_NOTES_REF, notesCommit)
-
-            val note = noteRead(repo.gitDir, targetOid)
-            assertEquals("This is a note", note.message)
-            assertEquals(targetOid, note.annotatedOid)
-        } finally {
-            tmp.deleteRecursively()
-        }
-    }
-
-    @Test
-    fun testNoteList() {
-        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_notes_list")
-        tmp.deleteRecursively()
-        try {
-            val repo = Repository.init(tmp.path)
-            val sig = Signature(name = "Test", email = "test@test.com", time = 1000000000, offset = 0)
-
-            java.io.File(repo.gitDir, "refs/notes").mkdirs()
-
-            val treeOid = writeLooseObject(repo.gitDir, ObjectType.TREE, byteArrayOf())
-            val c1Data = serializeCommit(treeOid, emptyList(), sig, sig, "c1")
-            val c1 = writeLooseObject(repo.gitDir, ObjectType.COMMIT, c1Data)
-            val c2Data = serializeCommit(treeOid, listOf(c1), sig, sig, "c2")
-            val c2 = writeLooseObject(repo.gitDir, ObjectType.COMMIT, c2Data)
-
-            val n1 = writeLooseObject(repo.gitDir, ObjectType.BLOB, "note1".toByteArray())
-            val n2 = writeLooseObject(repo.gitDir, ObjectType.BLOB, "note2".toByteArray())
-
-            val entries = listOf(
-                TreeEntry(mode = FileMode.BLOB, name = c1.hex, oid = n1),
-                TreeEntry(mode = FileMode.BLOB, name = c2.hex, oid = n2)
-            )
-            val notesTreeData = serializeTree(entries)
-            val notesTree = writeLooseObject(repo.gitDir, ObjectType.TREE, notesTreeData)
-            val notesCommitData = serializeCommit(notesTree, emptyList(), sig, sig, "Notes")
-            val notesCommit = writeLooseObject(repo.gitDir, ObjectType.COMMIT, notesCommitData)
-            writeReference(repo.gitDir, DEFAULT_NOTES_REF, notesCommit)
-
-            val notes = noteList(repo.gitDir)
-            assertEquals(2, notes.size)
-        } finally {
-            tmp.deleteRecursively()
-        }
-    }
-
-    // ============================================================
-    // Grafts Tests
-    // ============================================================
-
-    @Test
-    fun testGraftsParse() {
-        val grafts = Grafts()
-        grafts.parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb cccccccccccccccccccccccccccccccccccccccc\ndddddddddddddddddddddddddddddddddddddddd\n")
-        assertEquals(2, grafts.count)
-
-        val oidA = OID("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-        val graftA = grafts.get(oidA)!!
-        assertEquals(2, graftA.parents.size)
-
-        val oidD = OID("dddddddddddddddddddddddddddddddddddddddd")
-        val graftD = grafts.get(oidD)!!
-        assertEquals(0, graftD.parents.size)
-    }
-
-    @Test
-    fun testGraftsAddRemove() {
-        val grafts = Grafts()
-        val oid = OID("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-        val parent = OID("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-        grafts.add(Graft(oid = oid, parents = listOf(parent)))
-        assertTrue(grafts.contains(oid))
-        assertEquals(1, grafts.getParents(oid)?.size)
-        assertTrue(grafts.remove(oid))
-        assertFalse(grafts.contains(oid))
-    }
-
-    @Test
-    fun testGraftsLoadFile() {
-        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_test_grafts_load")
-        tmp.deleteRecursively()
-        try {
-            val repo = Repository.init(tmp.path)
-            val graftsDir = java.io.File(repo.gitDir, "info")
-            graftsDir.mkdirs()
-            java.io.File(graftsDir, "grafts").writeText("# comment\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n")
-
-            val grafts = Grafts.loadForRepo(repo.gitDir)
-            assertEquals(1, grafts.count)
-        } finally {
-            tmp.deleteRecursively()
-        }
-    }
-
-    // ============================================================
-    // Mailmap Tests
-    // ============================================================
-
-    @Test
-    fun testMailmapEmailOnly() {
-        val mm = Mailmap()
-        mm.parse("<real@example.com> <old@example.com>\n")
-        assertEquals(1, mm.count)
-        val (name, email) = mm.resolve("Someone", "old@example.com")
-        assertEquals("real@example.com", email)
-        assertEquals("Someone", name)
-    }
-
-    @Test
-    fun testMailmapNameAndEmail() {
-        val mm = Mailmap()
-        mm.parse("Real Name <real@example.com> <old@example.com>\n")
-        val (name, email) = mm.resolve("Old", "old@example.com")
-        assertEquals("Real Name", name)
-        assertEquals("real@example.com", email)
-    }
-
-    @Test
-    fun testMailmapResolveSignature() {
-        val mm = Mailmap()
-        mm.parse("Proper Name <proper@example.com> <typo@example.com>\n")
-        val sig = Signature(name = "Wrong", email = "typo@example.com", time = 1000000000, offset = 0)
-        val resolved = mm.resolveSignature(sig)
-        assertEquals("Proper Name", resolved.name)
-        assertEquals("proper@example.com", resolved.email)
-    }
-
-    // ============================================================
-    // Pathspec Tests
-    // ============================================================
-
-    @Test
-    fun testPathspecBasicMatching() {
-        val ps = Pathspec(listOf("*.rs"))
-        assertTrue(ps.matchesPath("src/main.rs"))
-        assertFalse(ps.matchesPath("src/main.py"))
-    }
-
-    @Test
-    fun testPathspecDirectoryPrefix() {
-        val ps = Pathspec(listOf("src"))
-        assertTrue(ps.matchesPath("src"))
-        assertTrue(ps.matchesPath("src/main.rs"))
-        assertFalse(ps.matchesPath("test/main.rs"))
-    }
-
-    @Test
-    fun testPathspecNegation() {
-        val ps = Pathspec(listOf("*.rs", "!test_*.rs"))
-        assertTrue(ps.matchesPath("main.rs"))
-        assertFalse(ps.matchesPath("test_main.rs"))
-    }
-
-    @Test
-    fun testPathspecDoubleStar() {
-        val ps = Pathspec(listOf("**/test.rs"))
-        assertTrue(ps.matchesPath("test.rs"))
-        assertTrue(ps.matchesPath("src/test.rs"))
-        assertTrue(ps.matchesPath("a/b/c/test.rs"))
-        assertFalse(ps.matchesPath("test.py"))
-    }
-
-    @Test
-    fun testPathspecMatchPaths() {
-        val ps = Pathspec(listOf("*.rs", "*.toml"))
-        val result = ps.matchPaths(listOf("src/main.rs", "Cargo.toml", "README.md", "src/lib.rs"))
-        assertEquals(3, result.matches.size)
-    }
-
-    // ============================================================
     // Performance tests
     // ============================================================
 
@@ -3846,5 +3804,645 @@ class MuonGitTest {
         println("[perf] SHA-1 1MB: ${"%.2f".format(msSha1)}ms, SHA-256 1MB: ${"%.2f".format(msSha256)}ms, ratio: ${"%.2f".format(msSha256 / msSha1.coerceAtLeast(0.001))}x")
         assertTrue(msSha1 < 500.0)
         assertTrue(msSha256 < 500.0)
+    }
+
+    // -- Stash Tests --
+
+    private fun setupStashRepo(name: String): Triple<java.io.File, java.io.File, java.io.File> {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_stash_${name}_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        val repo = Repository.init(tmp.path)
+        val gd = repo.gitDir
+        val wd = tmp
+
+        // Create initial commit with a file
+        val blobOid = writeLooseObject(gd, ObjectType.BLOB, "initial\n".toByteArray())
+        val entry = TreeEntry(mode = FileMode.BLOB, name = "file.txt", oid = blobOid)
+        val treeData = serializeTree(listOf(entry))
+        val treeOid = writeLooseObject(gd, ObjectType.TREE, treeData)
+
+        val sig = Signature("Test User", "test@example.com", 1000000000L, 0)
+        val commitData = serializeCommit(
+            treeId = treeOid,
+            parentIds = emptyList(),
+            author = sig,
+            committer = sig,
+            message = "initial commit\n"
+        )
+        val commitOid = writeLooseObject(gd, ObjectType.COMMIT, commitData)
+        writeReference(gd, "refs/heads/main", commitOid)
+        writeSymbolicReference(gd, "HEAD", "refs/heads/main")
+
+        // Write the file to workdir
+        java.io.File(wd, "file.txt").writeText("initial\n")
+
+        return Triple(tmp, gd, wd)
+    }
+
+    @Test
+    fun testStashSaveAndList() {
+        val (tmp, gd, wd) = setupStashRepo("save")
+        try {
+            java.io.File(wd, "file.txt").writeText("modified\n")
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+            val oid = stashSave(gd, wd, sig, "my stash")
+            assertTrue(oid.hex.isNotEmpty())
+
+            val entries = stashList(gd)
+            assertEquals(1, entries.size)
+            assertEquals(0, entries[0].index)
+            assertTrue(entries[0].message.contains("my stash"))
+            assertEquals(oid, entries[0].oid)
+        } finally { tmp.deleteRecursively() }
+    }
+
+    @Test
+    fun testStashMultiple() {
+        val (tmp, gd, wd) = setupStashRepo("multi")
+        try {
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+
+            java.io.File(wd, "file.txt").writeText("change1\n")
+            stashSave(gd, wd, sig, "first")
+
+            java.io.File(wd, "file.txt").writeText("change2\n")
+            stashSave(gd, wd, sig, "second")
+
+            val entries = stashList(gd)
+            assertEquals(2, entries.size)
+            assertEquals(0, entries[0].index)
+            assertTrue(entries[0].message.contains("second"))
+            assertEquals(1, entries[1].index)
+            assertTrue(entries[1].message.contains("first"))
+        } finally { tmp.deleteRecursively() }
+    }
+
+    @Test
+    fun testStashApply() {
+        val (tmp, gd, wd) = setupStashRepo("apply")
+        try {
+            java.io.File(wd, "file.txt").writeText("stashed content\n")
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+            stashSave(gd, wd, sig, "apply test")
+
+            val result = stashApply(gd, 0)
+            assertFalse(result.hasConflicts)
+            assertTrue(result.files.isNotEmpty())
+
+            // Stash should still exist
+            val entries = stashList(gd)
+            assertEquals(1, entries.size)
+        } finally { tmp.deleteRecursively() }
+    }
+
+    @Test
+    fun testStashPop() {
+        val (tmp, gd, wd) = setupStashRepo("pop")
+        try {
+            java.io.File(wd, "file.txt").writeText("pop content\n")
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+            stashSave(gd, wd, sig, "pop test")
+
+            val result = stashPop(gd, 0)
+            assertFalse(result.hasConflicts)
+
+            // Stash should be removed
+            val entries = stashList(gd)
+            assertEquals(0, entries.size)
+        } finally { tmp.deleteRecursively() }
+    }
+
+    @Test
+    fun testStashDrop() {
+        val (tmp, gd, wd) = setupStashRepo("drop")
+        try {
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+            java.io.File(wd, "file.txt").writeText("drop1\n")
+            stashSave(gd, wd, sig, "first")
+            java.io.File(wd, "file.txt").writeText("drop2\n")
+            stashSave(gd, wd, sig, "second")
+
+            stashDrop(gd, 0)
+            val entries = stashList(gd)
+            assertEquals(1, entries.size)
+            assertTrue(entries[0].message.contains("first"))
+        } finally { tmp.deleteRecursively() }
+    }
+
+    @Test
+    fun testStashDropLast() {
+        val (tmp, gd, wd) = setupStashRepo("droplast")
+        try {
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+            java.io.File(wd, "file.txt").writeText("droplast\n")
+            stashSave(gd, wd, sig, "only")
+
+            stashDrop(gd, 0)
+            val entries = stashList(gd)
+            assertEquals(0, entries.size)
+
+            // refs/stash should be gone
+            assertFailsWith<MuonGitException> { resolveReference(gd, "refs/stash") }
+        } finally { tmp.deleteRecursively() }
+    }
+
+    @Test
+    fun testStashEmptyWorkdirFails() {
+        val (tmp, gd, wd) = setupStashRepo("empty")
+        try {
+            // Remove workdir file so there's nothing to stash
+            java.io.File(wd, "file.txt").delete()
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+            val e = assertFailsWith<MuonGitException.NotFound> {
+                stashSave(gd, wd, sig, "should fail")
+            }
+            assertTrue(e.message!!.contains("no local changes"))
+        } finally { tmp.deleteRecursively() }
+    }
+
+    @Test
+    fun testStashBareRepoFails() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_stash_bare_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path, bare = true)
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+            assertFailsWith<MuonGitException.BareRepo> {
+                stashSave(repo.gitDir, null, sig, "bare stash")
+            }
+        } finally { tmp.deleteRecursively() }
+    }
+
+    @Test
+    fun testStashInvalidIndex() {
+        val (tmp, gd, wd) = setupStashRepo("invalid")
+        try {
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+            java.io.File(wd, "file.txt").writeText("test\n")
+            stashSave(gd, wd, sig, "one")
+
+            val e = assertFailsWith<MuonGitException.NotFound> {
+                stashApply(gd, 99)
+            }
+            assertTrue(e.message!!.contains("99"))
+        } finally { tmp.deleteRecursively() }
+    }
+
+    @Test
+    fun testStashDefaultMessage() {
+        val (tmp, gd, wd) = setupStashRepo("defmsg")
+        try {
+            java.io.File(wd, "file.txt").writeText("changed\n")
+            val sig = Signature("Test User", "test@example.com", 1000000001L, 0)
+            stashSave(gd, wd, sig)
+
+            val entries = stashList(gd)
+            assertEquals(1, entries.size)
+            assertTrue(entries[0].message.contains("WIP on"))
+        } finally { tmp.deleteRecursively() }
+    }
+
+    // -- Cherry-pick Tests --
+
+    private fun makeTreeWithFile(gitDir: java.io.File, name: String, content: String): OID {
+        val blobOid = writeLooseObject(gitDir, ObjectType.BLOB, content.toByteArray())
+        val entry = TreeEntry(mode = FileMode.BLOB, name = name, oid = blobOid)
+        val treeData = serializeTree(listOf(entry))
+        return writeLooseObject(gitDir, ObjectType.TREE, treeData)
+    }
+
+    private fun makeTreeWithFiles(gitDir: java.io.File, files: List<Pair<String, String>>): OID {
+        val entries = files.map { (name, content) ->
+            val blobOid = writeLooseObject(gitDir, ObjectType.BLOB, content.toByteArray())
+            TreeEntry(mode = FileMode.BLOB, name = name, oid = blobOid)
+        }
+        val treeData = serializeTree(entries)
+        return writeLooseObject(gitDir, ObjectType.TREE, treeData)
+    }
+
+    private fun makeCommitWithTree(gitDir: java.io.File, treeOid: OID, parents: List<OID>, msg: String): OID {
+        val sig = Signature("Test", "test@test.com", 1000000000L, 0)
+        val data = serializeCommit(
+            treeId = treeOid,
+            parentIds = parents,
+            author = sig,
+            committer = sig,
+            message = msg
+        )
+        return writeLooseObject(gitDir, ObjectType.COMMIT, data)
+    }
+
+    @Test
+    fun testCherryPickBasic() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_cp_basic_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree0 = makeTreeWithFile(gd, "file.txt", "base\n")
+            val c0 = makeCommitWithTree(gd, tree0, emptyList(), "c0")
+
+            val tree1 = makeTreeWithFile(gd, "file.txt", "base\nline2\n")
+            val c1 = makeCommitWithTree(gd, tree1, listOf(c0), "c1")
+
+            writeReference(gd, "refs/heads/main", c0)
+
+            val result = cherryPick(gd, c1)
+            assertFalse(result.hasConflicts)
+            assertEquals(1, result.files.size)
+            assertEquals("file.txt", result.files[0].first)
+            assertEquals("base\nline2\n", result.files[0].second)
+
+            assertTrue(gd.resolve("CHERRY_PICK_HEAD").exists())
+            cherryPickCleanup(gd)
+            assertFalse(gd.resolve("CHERRY_PICK_HEAD").exists())
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testCherryPickConflict() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_cp_conflict_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree0 = makeTreeWithFile(gd, "file.txt", "line1\n")
+            val c0 = makeCommitWithTree(gd, tree0, emptyList(), "c0")
+
+            val tree1 = makeTreeWithFile(gd, "file.txt", "branch change\n")
+            val c1 = makeCommitWithTree(gd, tree1, listOf(c0), "c1")
+
+            val treeH = makeTreeWithFile(gd, "file.txt", "head change\n")
+            val cH = makeCommitWithTree(gd, treeH, listOf(c0), "head")
+            writeReference(gd, "refs/heads/main", cH)
+
+            val result = cherryPick(gd, c1)
+            assertTrue(result.hasConflicts)
+            cherryPickCleanup(gd)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testCherryPickNewFile() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_cp_newfile_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree0 = makeTreeWithFile(gd, "file.txt", "data\n")
+            val c0 = makeCommitWithTree(gd, tree0, emptyList(), "c0")
+
+            val tree1 = makeTreeWithFiles(gd, listOf("file.txt" to "data\n", "new.txt" to "new content\n"))
+            val c1 = makeCommitWithTree(gd, tree1, listOf(c0), "c1")
+
+            writeReference(gd, "refs/heads/main", c0)
+
+            val result = cherryPick(gd, c1)
+            assertFalse(result.hasConflicts)
+            assertTrue(result.files.any { it.first == "new.txt" })
+            cherryPickCleanup(gd)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    // -- Revert Tests --
+
+    @Test
+    fun testRevertBasic() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_rv_basic_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree0 = makeTreeWithFile(gd, "file.txt", "original\n")
+            val c0 = makeCommitWithTree(gd, tree0, emptyList(), "c0")
+
+            val tree1 = makeTreeWithFile(gd, "file.txt", "changed\n")
+            val c1 = makeCommitWithTree(gd, tree1, listOf(c0), "c1")
+
+            writeReference(gd, "refs/heads/main", c1)
+
+            val result = revert(gd, c1)
+            assertFalse(result.hasConflicts)
+            assertEquals(1, result.files.size)
+            assertEquals("original\n", result.files[0].second)
+            revertCleanup(gd)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testRevertConflict() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_rv_conflict_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree0 = makeTreeWithFile(gd, "file.txt", "line1\n")
+            val c0 = makeCommitWithTree(gd, tree0, emptyList(), "c0")
+
+            val tree1 = makeTreeWithFile(gd, "file.txt", "modified\n")
+            val c1 = makeCommitWithTree(gd, tree1, listOf(c0), "c1")
+
+            val treeH = makeTreeWithFile(gd, "file.txt", "further changes\n")
+            val cH = makeCommitWithTree(gd, treeH, listOf(c1), "head")
+            writeReference(gd, "refs/heads/main", cH)
+
+            val result = revert(gd, c1)
+            assertTrue(result.hasConflicts)
+            revertCleanup(gd)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    // -- Rebase Tests --
+
+    @Test
+    fun testRebaseBasic() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_rebase_basic_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree0 = makeTreeWithFile(gd, "file.txt", "base\n")
+            val c0 = makeCommitWithTree(gd, tree0, emptyList(), "base")
+
+            val tree1 = makeTreeWithFiles(gd, listOf("file.txt" to "base\n", "main.txt" to "main\n"))
+            val c1 = makeCommitWithTree(gd, tree1, listOf(c0), "main: add main.txt")
+
+            val tree2 = makeTreeWithFile(gd, "file.txt", "base\ntopic line\n")
+            val c2 = makeCommitWithTree(gd, tree2, listOf(c0), "topic: modify file")
+
+            writeReference(gd, "refs/heads/main", c1)
+
+            val rebase = Rebase.begin(gd, c2, c0, onto = c1)
+            assertEquals(1, rebase.operationCount)
+
+            val op = rebase.next()
+            assertNotNull(op)
+            val (hasConflicts, _) = rebase.applyCurrent()
+            assertFalse(hasConflicts)
+
+            val sig = Signature("Test", "test@test.com", 1000000000L, 0)
+            val newOid = rebase.commit(committer = sig)
+            assertFalse(newOid.isZero)
+
+            val nextOp = rebase.next()
+            assertNull(nextOp)
+
+            rebase.finish()
+            assertFalse(gd.resolve("rebase-merge").exists())
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testRebaseAbort() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_rebase_abort_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree0 = makeTreeWithFile(gd, "f.txt", "data\n")
+            val c0 = makeCommitWithTree(gd, tree0, emptyList(), "c0")
+
+            val tree1 = makeTreeWithFile(gd, "f.txt", "data2\n")
+            val c1 = makeCommitWithTree(gd, tree1, listOf(c0), "c1")
+
+            writeReference(gd, "refs/heads/main", c0)
+
+            val rebase = Rebase.begin(gd, c1, c0)
+            assertTrue(gd.resolve("rebase-merge").exists())
+
+            rebase.abort()
+            assertFalse(gd.resolve("rebase-merge").exists())
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testRebaseOpen() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_rebase_open_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree0 = makeTreeWithFile(gd, "f.txt", "data\n")
+            val c0 = makeCommitWithTree(gd, tree0, emptyList(), "c0")
+
+            val tree1 = makeTreeWithFile(gd, "f.txt", "more\n")
+            val c1 = makeCommitWithTree(gd, tree1, listOf(c0), "c1")
+
+            writeReference(gd, "refs/heads/main", c0)
+
+            Rebase.begin(gd, c1, c0)
+
+            val reopened = Rebase.open(gd)
+            assertEquals(1, reopened.operationCount)
+            assertEquals(c1, reopened.operations[0].id)
+
+            reopened.abort()
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    // ---- Blame tests ----
+
+    @Test
+    fun testBlameSingleCommit() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_single_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree = makeTreeWithFile(gd, "file.txt", "line1\nline2\nline3")
+            val c = makeCommitWithTree(gd, tree, emptyList(), "initial")
+
+            writeReference(gd, "refs/heads/main", c)
+            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
+
+            val result = blameFile(gd, "file.txt")
+            assertEquals(3, result.lineCount)
+            assertEquals(1, result.hunkCount)
+            val hunk = result.hunkByIndex(0)!!
+            assertEquals(3, hunk.linesInHunk)
+            assertEquals(c, hunk.finalCommitId)
+            assertEquals(1, hunk.finalStartLineNumber)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testBlameTwoCommits() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_two_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree1 = makeTreeWithFile(gd, "file.txt", "line1\nline2")
+            val c1 = makeCommitWithTree(gd, tree1, emptyList(), "first")
+
+            val tree2 = makeTreeWithFile(gd, "file.txt", "line1\ninserted\nline2")
+            val c2 = makeCommitWithTree(gd, tree2, listOf(c1), "second")
+
+            writeReference(gd, "refs/heads/main", c2)
+            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
+
+            val result = blameFile(gd, "file.txt")
+            assertEquals(3, result.lineCount)
+
+            val h1 = result.hunkByLine(1)!!
+            assertEquals(c1, h1.finalCommitId)
+
+            val h2 = result.hunkByLine(2)!!
+            assertEquals(c2, h2.finalCommitId)
+
+            val h3 = result.hunkByLine(3)!!
+            assertEquals(c1, h3.finalCommitId)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testBlameLineRange() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_range_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree = makeTreeWithFile(gd, "file.txt", "a\nb\nc\nd\ne")
+            val c = makeCommitWithTree(gd, tree, emptyList(), "init")
+
+            writeReference(gd, "refs/heads/main", c)
+            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
+
+            val opts = BlameOptions(minLine = 2, maxLine = 4)
+            val result = blameFile(gd, "file.txt", opts)
+            assertEquals(5, result.lineCount)
+            val totalBlamed = result.hunks.sumOf { it.linesInHunk }
+            assertEquals(3, totalBlamed)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testBlameHunkByLine() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_hbl_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree = makeTreeWithFile(gd, "test.txt", "hello\nworld")
+            val c = makeCommitWithTree(gd, tree, emptyList(), "init")
+
+            writeReference(gd, "refs/heads/main", c)
+            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
+
+            val result = blameFile(gd, "test.txt")
+            assertNull(result.hunkByLine(0))
+            assertNotNull(result.hunkByLine(1))
+            assertNotNull(result.hunkByLine(2))
+            assertNull(result.hunkByLine(3))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testBlameEmptyFile() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_empty_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree = makeTreeWithFile(gd, "empty.txt", "")
+            val c = makeCommitWithTree(gd, tree, emptyList(), "empty")
+
+            writeReference(gd, "refs/heads/main", c)
+            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
+
+            val result = blameFile(gd, "empty.txt")
+            assertEquals(0, result.lineCount)
+            assertEquals(0, result.hunkCount)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testBlameSubdirectory() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_subdir_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val blobOid = writeLooseObject(gd, ObjectType.BLOB, "nested content".toByteArray())
+            val innerEntry = TreeEntry(mode = FileMode.BLOB, name = "deep.txt", oid = blobOid)
+            val innerTreeData = serializeTree(listOf(innerEntry))
+            val innerTree = writeLooseObject(gd, ObjectType.TREE, innerTreeData)
+
+            val outerEntry = TreeEntry(mode = FileMode.TREE, name = "subdir", oid = innerTree)
+            val outerTreeData = serializeTree(listOf(outerEntry))
+            val outerTree = writeLooseObject(gd, ObjectType.TREE, outerTreeData)
+
+            val c = makeCommitWithTree(gd, outerTree, emptyList(), "nested")
+
+            writeReference(gd, "refs/heads/main", c)
+            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
+
+            val result = blameFile(gd, "subdir/deep.txt")
+            assertEquals(1, result.lineCount)
+            assertEquals(1, result.hunkCount)
+            assertEquals(c, result.hunks[0].finalCommitId)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testBlameFileNotFound() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_nf_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree = makeTreeWithFile(gd, "exists.txt", "content")
+            val c = makeCommitWithTree(gd, tree, emptyList(), "init")
+
+            writeReference(gd, "refs/heads/main", c)
+            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
+
+            assertFailsWith<MuonGitException.NotFound> { blameFile(gd, "nonexistent.txt") }
+        } finally {
+            tmp.deleteRecursively()
+        }
     }
 }

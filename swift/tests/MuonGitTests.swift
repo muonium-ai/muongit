@@ -3855,4 +3855,165 @@ final class MuonGitTests: XCTestCase {
 
         try reopened.abort()
     }
+
+    // MARK: - Blame tests
+
+    func testBlameSingleCommit() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_blame_single"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let gd = repo.gitDir
+
+        let tree = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "line1\nline2\nline3")
+        let c = try makeCommitWithTree(gitDir: gd, treeOid: tree, parents: [], msg: "initial")
+
+        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c)
+        try writeSymbolicReference(gitDir: gd, name: "HEAD", target: "refs/heads/main")
+
+        let result = try blameFile(gitDir: gd, path: "file.txt")
+        XCTAssertEqual(result.lineCount, 3)
+        XCTAssertEqual(result.hunkCount, 1)
+        let hunk = result.hunkByIndex(0)!
+        XCTAssertEqual(hunk.linesInHunk, 3)
+        XCTAssertEqual(hunk.finalCommitId, c)
+        XCTAssertEqual(hunk.finalStartLineNumber, 1)
+    }
+
+    func testBlameTwoCommits() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_blame_two"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let gd = repo.gitDir
+
+        let tree1 = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "line1\nline2")
+        let c1 = try makeCommitWithTree(gitDir: gd, treeOid: tree1, parents: [], msg: "first")
+
+        let tree2 = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "line1\ninserted\nline2")
+        let c2 = try makeCommitWithTree(gitDir: gd, treeOid: tree2, parents: [c1], msg: "second")
+
+        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c2)
+        try writeSymbolicReference(gitDir: gd, name: "HEAD", target: "refs/heads/main")
+
+        let result = try blameFile(gitDir: gd, path: "file.txt")
+        XCTAssertEqual(result.lineCount, 3)
+
+        let h1 = result.hunkByLine(1)!
+        XCTAssertEqual(h1.finalCommitId, c1)
+
+        let h2 = result.hunkByLine(2)!
+        XCTAssertEqual(h2.finalCommitId, c2)
+
+        let h3 = result.hunkByLine(3)!
+        XCTAssertEqual(h3.finalCommitId, c1)
+    }
+
+    func testBlameLineRange() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_blame_range"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let gd = repo.gitDir
+
+        let tree = try makeTreeWithFile(gitDir: gd, name: "file.txt", content: "a\nb\nc\nd\ne")
+        let c = try makeCommitWithTree(gitDir: gd, treeOid: tree, parents: [], msg: "init")
+
+        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c)
+        try writeSymbolicReference(gitDir: gd, name: "HEAD", target: "refs/heads/main")
+
+        let opts = BlameOptions(minLine: 2, maxLine: 4)
+        let result = try blameFile(gitDir: gd, path: "file.txt", options: opts)
+        XCTAssertEqual(result.lineCount, 5)
+        let totalBlamed = result.hunks.reduce(0) { $0 + $1.linesInHunk }
+        XCTAssertEqual(totalBlamed, 3)
+    }
+
+    func testBlameHunkByLine() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_blame_hbl"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let gd = repo.gitDir
+
+        let tree = try makeTreeWithFile(gitDir: gd, name: "test.txt", content: "hello\nworld")
+        let c = try makeCommitWithTree(gitDir: gd, treeOid: tree, parents: [], msg: "init")
+
+        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c)
+        try writeSymbolicReference(gitDir: gd, name: "HEAD", target: "refs/heads/main")
+
+        let result = try blameFile(gitDir: gd, path: "test.txt")
+        XCTAssertNil(result.hunkByLine(0))
+        XCTAssertNotNil(result.hunkByLine(1))
+        XCTAssertNotNil(result.hunkByLine(2))
+        XCTAssertNil(result.hunkByLine(3))
+    }
+
+    func testBlameEmptyFile() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_blame_empty"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let gd = repo.gitDir
+
+        let tree = try makeTreeWithFile(gitDir: gd, name: "empty.txt", content: "")
+        let c = try makeCommitWithTree(gitDir: gd, treeOid: tree, parents: [], msg: "empty")
+
+        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c)
+        try writeSymbolicReference(gitDir: gd, name: "HEAD", target: "refs/heads/main")
+
+        let result = try blameFile(gitDir: gd, path: "empty.txt")
+        XCTAssertEqual(result.lineCount, 0)
+        XCTAssertEqual(result.hunkCount, 0)
+    }
+
+    func testBlameSubdirectory() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_blame_subdir"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let gd = repo.gitDir
+
+        let blobOid = try writeLooseObject(gitDir: gd, type: .blob, data: Data("nested content".utf8))
+        let innerEntry = TreeEntry(mode: FileMode.blob.rawValue, name: "deep.txt", oid: blobOid)
+        let innerTreeData = serializeTree(entries: [innerEntry])
+        let innerTree = try writeLooseObject(gitDir: gd, type: .tree, data: innerTreeData)
+
+        let outerEntry = TreeEntry(mode: FileMode.tree.rawValue, name: "subdir", oid: innerTree)
+        let outerTreeData = serializeTree(entries: [outerEntry])
+        let outerTree = try writeLooseObject(gitDir: gd, type: .tree, data: outerTreeData)
+
+        let c = try makeCommitWithTree(gitDir: gd, treeOid: outerTree, parents: [], msg: "nested")
+
+        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c)
+        try writeSymbolicReference(gitDir: gd, name: "HEAD", target: "refs/heads/main")
+
+        let result = try blameFile(gitDir: gd, path: "subdir/deep.txt")
+        XCTAssertEqual(result.lineCount, 1)
+        XCTAssertEqual(result.hunkCount, 1)
+        XCTAssertEqual(result.hunks[0].finalCommitId, c)
+    }
+
+    func testBlameFileNotFound() throws {
+        let tmp = NSTemporaryDirectory() + "muongit_test_blame_nf"
+        try? FileManager.default.removeItem(atPath: tmp)
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        let repo = try Repository.create(at: tmp)
+        let gd = repo.gitDir
+
+        let tree = try makeTreeWithFile(gitDir: gd, name: "exists.txt", content: "content")
+        let c = try makeCommitWithTree(gitDir: gd, treeOid: tree, parents: [], msg: "init")
+
+        try writeReference(gitDir: gd, name: "refs/heads/main", oid: c)
+        try writeSymbolicReference(gitDir: gd, name: "HEAD", target: "refs/heads/main")
+
+        XCTAssertThrowsError(try blameFile(gitDir: gd, path: "nonexistent.txt"))
+    }
 }
