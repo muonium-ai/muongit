@@ -28,16 +28,10 @@ pub struct RebaseOperation {
 }
 
 /// Options for rebase
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RebaseOptions {
     /// Perform rebase in-memory (don't modify state files)
     pub inmemory: bool,
-}
-
-impl Default for RebaseOptions {
-    fn default() -> Self {
-        RebaseOptions { inmemory: false }
-    }
 }
 
 /// An in-progress rebase
@@ -175,6 +169,7 @@ impl Rebase {
     /// Get the next operation and apply the patch.
     ///
     /// Returns the operation or None if all operations are done.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Option<&RebaseOperation>, MuonGitError> {
         let next_idx = match self.current {
             Some(i) => i + 1,
@@ -201,6 +196,7 @@ impl Rebase {
     /// Apply the current operation (cherry-pick the commit onto the current base).
     ///
     /// Returns merge result: (has_conflicts, files)
+    #[allow(clippy::type_complexity)]
     pub fn apply_current(
         &self,
     ) -> Result<(bool, Vec<(String, String, bool)>), MuonGitError> {
@@ -283,7 +279,7 @@ impl Rebase {
         let parent = self.last_commit_id.as_ref().unwrap_or(&self.onto_id);
         let commit_data = serialize_commit(
             &tree_oid,
-            &[parent.clone()],
+            std::slice::from_ref(parent),
             actual_author,
             committer,
             actual_message,
