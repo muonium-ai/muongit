@@ -54,9 +54,15 @@ sourceSets {
         compileClasspath += sourceSets.main.get().output + sourceSets.main.get().compileClasspath
         runtimeClasspath += sourceSets.main.get().output + sourceSets.main.get().runtimeClasspath
     }
+    create("conformance") {
+        kotlin.srcDir("src/conformance/kotlin")
+        compileClasspath += sourceSets.main.get().output + sourceSets.main.get().compileClasspath
+        runtimeClasspath += sourceSets.main.get().output + sourceSets.main.get().runtimeClasspath
+    }
 }
 
 tasks.named("compileKotlin") { dependsOn(generateVersion) }
+tasks.matching { it.name == "compileConformanceKotlin" }.configureEach { dependsOn(generateVersion) }
 
 dependencies {
     testImplementation(kotlin("test"))
@@ -70,4 +76,16 @@ tasks.register<JavaExec>("bench") {
     description = "Run MuonGit benchmarks"
     mainClass.set("ai.muonium.muongit.BenchmarkKt")
     classpath = sourceSets["bench"].runtimeClasspath
+}
+
+tasks.register<JavaExec>("runConformance") {
+    description = "Run the MuonGit cross-implementation conformance helper"
+    mainClass.set("ai.muonium.muongit.ConformanceKt")
+    classpath = sourceSets["conformance"].runtimeClasspath
+    doFirst {
+        args = (System.getenv("MUONGIT_CONFORMANCE_ARGS") ?: "")
+            .lineSequence()
+            .filter { it.isNotBlank() }
+            .toList()
+    }
 }

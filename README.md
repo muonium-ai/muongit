@@ -62,6 +62,25 @@ cargo run --manifest-path rust/Cargo.toml --bin muongit -- status
 The command surface, exit codes, authentication environment variables, and
 known gaps are documented in [docs/cli.md](docs/cli.md).
 
+## Conformance
+
+The cross-implementation repository conformance matrix lives in
+`scripts/repository_conformance.py`.
+
+```bash
+python3 scripts/repository_conformance.py
+```
+
+That workflow:
+
+- authors the same canonical repository scenario with each writer implementation
+- persists checkpoints under `tmp/repository_conformance/`
+- has every implementation reopen each checkpoint and compare normalized semantic snapshots
+- covers objects, porcelain, refs/branches, revision walking, checkout/reset/restore, patch/apply, and remote clone/fetch/push
+
+When the matrix fails, it reports the writer implementation, checkpoint, and
+reader implementation that disagreed.
+
 ## libgit2 API Modules
 
 The following core modules are targeted for parity (68 public APIs):

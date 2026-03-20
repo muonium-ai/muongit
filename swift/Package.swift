@@ -15,6 +15,10 @@ let package = Package(
         .library(
             name: "MuonGit",
             targets: ["MuonGit"]
+        ),
+        .executable(
+            name: "muongit-conformance",
+            targets: ["muongit-conformance"]
         )
     ],
     targets: [
@@ -31,6 +35,11 @@ let package = Package(
             name: "muongit-bench",
             dependencies: ["MuonGit"],
             path: "bench"
+        ),
+        .executableTarget(
+            name: "muongit-conformance",
+            dependencies: ["MuonGit"],
+            path: "conformance"
         )
     ]
 )
