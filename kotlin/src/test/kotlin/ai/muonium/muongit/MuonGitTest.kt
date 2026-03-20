@@ -2560,6 +2560,227 @@ class MuonGitTest {
         }
     }
 
+    // Filter Tests
+
+    @Test
+    fun testCrlfToLfClean() {
+        val result = crlfToLf("hello\r\nworld\r\n".toByteArray())
+        assertTrue(result is FilterResult.Applied)
+        assertTrue((result as FilterResult.Applied).data.contentEquals("hello\nworld\n".toByteArray()))
+    }
+
+    @Test
+    fun testCrlfToLfNoCrlf() {
+        val result = crlfToLf("hello\nworld\n".toByteArray())
+        assertTrue(result is FilterResult.Passthrough)
+    }
+
+    @Test
+    fun testLfToCrlfSmudge() {
+        val result = lfToCrlf("hello\nworld\n".toByteArray())
+        assertTrue(result is FilterResult.Applied)
+        assertTrue((result as FilterResult.Applied).data.contentEquals("hello\r\nworld\r\n".toByteArray()))
+    }
+
+    @Test
+    fun testLfToCrlfAlreadyCrlf() {
+        val result = lfToCrlf("hello\r\nworld\r\n".toByteArray())
+        assertTrue(result is FilterResult.Passthrough)
+    }
+
+    @Test
+    fun testIdentSmudge() {
+        val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val source = FilterSource("test.txt", FilterMode.TO_WORKTREE, oid)
+        val filter = IdentFilter()
+        val result = filter.apply("Version: \$Id\$\n".toByteArray(), source)
+        assertTrue(result is FilterResult.Applied)
+        val s = (result as FilterResult.Applied).data.toString(Charsets.UTF_8)
+        assertTrue(s.contains("\$Id: aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d \$"))
+    }
+
+    @Test
+    fun testIdentClean() {
+        val source = FilterSource("test.txt", FilterMode.TO_ODB)
+        val filter = IdentFilter()
+        val input = "Version: \$Id: aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d \$\n".toByteArray()
+        val result = filter.apply(input, source)
+        assertTrue(result is FilterResult.Applied)
+        assertTrue((result as FilterResult.Applied).data.contentEquals("Version: \$Id\$\n".toByteArray()))
+    }
+
+    @Test
+    fun testIdentNoMarker() {
+        val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val source = FilterSource("test.txt", FilterMode.TO_WORKTREE, oid)
+        val filter = IdentFilter()
+        val result = filter.apply("no markers here\n".toByteArray(), source)
+        assertTrue(result is FilterResult.Passthrough)
+    }
+
+    @Test
+    fun testBinaryDetection() {
+        assertTrue(isBinaryData(byteArrayOf(0x68, 0x65, 0x6C, 0x00, 0x6F)))
+        assertFalse(isBinaryData("hello world".toByteArray()))
+    }
+
+    @Test
+    fun testBinarySkippedByCrlf() {
+        val source = FilterSource("test.bin", FilterMode.TO_ODB)
+        val input = byteArrayOf(0x68, 0x65, 0x6C, 0x0D, 0x0A, 0x00, 0x77)
+        val filter = CrlfFilter(autoCrlf = null, coreEol = null)
+        val result = filter.apply(input, source)
+        assertTrue(result is FilterResult.Passthrough)
+    }
+
+    @Test
+    fun testFilterListLoadTextFile() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_filter_text")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            java.io.File(repo.workdir!!, ".gitattributes").writeText("*.txt text\n")
+            val list = FilterList.load(repo.gitDir, repo.workdir,
+                "hello.txt", FilterMode.TO_ODB)
+            assertTrue(list.contains("crlf"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testFilterListLoadBinaryFile() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_filter_binary")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            java.io.File(repo.workdir!!, ".gitattributes").writeText("*.bin binary\n")
+            val list = FilterList.load(repo.gitDir, repo.workdir,
+                "image.bin", FilterMode.TO_ODB)
+            assertTrue(list.isEmpty)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testFilterListLoadIdent() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_filter_ident")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            java.io.File(repo.workdir!!, ".gitattributes").writeText("*.c ident\n")
+            val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            val list = FilterList.load(repo.gitDir, repo.workdir,
+                "main.c", FilterMode.TO_WORKTREE, oid)
+            assertTrue(list.contains("ident"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testFilterListApplyClean() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_filter_apply_clean")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            java.io.File(repo.workdir!!, ".gitattributes").writeText("*.txt text ident\n")
+            val list = FilterList.load(repo.gitDir, repo.workdir,
+                "readme.txt", FilterMode.TO_ODB)
+            val input = "Version: \$Id: abc123 \$\r\nHello\r\n".toByteArray()
+            val output = list.apply(input)
+            assertTrue(output.contentEquals("Version: \$Id\$\nHello\n".toByteArray()))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testFilterListApplySmudge() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_filter_apply_smudge")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            java.io.File(repo.workdir!!, ".gitattributes").writeText("*.txt text eol=crlf ident\n")
+            val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+            val list = FilterList.load(repo.gitDir, repo.workdir,
+                "readme.txt", FilterMode.TO_WORKTREE, oid)
+            val input = "Version: \$Id\$\nHello\n".toByteArray()
+            val output = list.apply(input)
+            val s = output.toString(Charsets.UTF_8)
+            assertTrue(s.contains("\$Id: aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d \$"))
+            assertTrue(s.contains("\r\n"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testFilterEolLfAttribute() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_filter_eol_lf")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            java.io.File(repo.workdir!!, ".gitattributes").writeText("*.txt text eol=lf\n")
+            val list = FilterList.load(repo.gitDir, repo.workdir,
+                "readme.txt", FilterMode.TO_WORKTREE)
+            assertFalse(list.contains("crlf"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testFilterAutoCrlfConfig() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_filter_autocrlf")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            java.io.File(repo.gitDir, "config").writeText("[core]\n\tautocrlf = true\n")
+            val list = FilterList.load(repo.gitDir, repo.workdir,
+                "readme.txt", FilterMode.TO_ODB)
+            assertTrue(list.contains("crlf"))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testFilterEmptyList() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_kotlin_filter_empty")
+        tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val list = FilterList.load(repo.gitDir, repo.workdir,
+                "test.txt", FilterMode.TO_ODB)
+            assertTrue(list.isEmpty)
+            assertEquals(0, list.size)
+            assertTrue(list.apply("hello world\n".toByteArray()).contentEquals("hello world\n".toByteArray()))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testMultipleIdentMarkers() {
+        val input = "\$Id\$ and \$Id\$ again".toByteArray()
+        val oid = OID("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        val result = identSmudge(input, oid)
+        assertTrue(result is FilterResult.Applied)
+        val s = (result as FilterResult.Applied).data.toString(Charsets.UTF_8)
+        val count = s.split("\$Id: aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d \$").size - 1
+        assertEquals(2, count)
+    }
+
+    @Test
+    fun testIdentCleanMultiple() {
+        val input = "\$Id: abc \$ and \$Id: def \$".toByteArray()
+        val result = identClean(input)
+        assertTrue(result is FilterResult.Applied)
+        assertTrue((result as FilterResult.Applied).data.contentEquals("\$Id\$ and \$Id\$".toByteArray()))
+    }
+
     // Pack Index Tests
 
     private fun sortedTestOids(): Triple<List<OID>, IntArray, LongArray> {

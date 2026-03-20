@@ -2292,6 +2292,229 @@ final class MuonGitTests: XCTestCase {
         XCTAssertNil(config.get(section: "submodule.b", key: "url"))
     }
 
+    // MARK: - Filter Tests
+
+    func testCrlfToLfClean() {
+        let input = Data("hello\r\nworld\r\n".utf8)
+        let result = crlfToLf(input)
+        if case .applied(let data) = result {
+            XCTAssertEqual(data, Data("hello\nworld\n".utf8))
+        } else {
+            XCTFail("expected applied")
+        }
+    }
+
+    func testCrlfToLfNoCrlf() {
+        let input = Data("hello\nworld\n".utf8)
+        let result = crlfToLf(input)
+        if case .passthrough = result {} else {
+            XCTFail("expected passthrough")
+        }
+    }
+
+    func testLfToCrlfSmudge() {
+        let input = Data("hello\nworld\n".utf8)
+        let result = lfToCrlf(input)
+        if case .applied(let data) = result {
+            XCTAssertEqual(data, Data("hello\r\nworld\r\n".utf8))
+        } else {
+            XCTFail("expected applied")
+        }
+    }
+
+    func testLfToCrlfAlreadyCrlf() {
+        let input = Data("hello\r\nworld\r\n".utf8)
+        let result = lfToCrlf(input)
+        if case .passthrough = result {} else {
+            XCTFail("expected passthrough")
+        }
+    }
+
+    func testIdentSmudge() {
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let source = FilterSource(path: "test.txt", mode: .toWorktree, oid: oid)
+        let filter = IdentFilter()
+        let result = filter.apply(input: Data("Version: $Id$\n".utf8), source: source)
+        if case .applied(let data) = result {
+            let s = String(data: data, encoding: .utf8)!
+            XCTAssertTrue(s.contains("$Id: aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d $"))
+        } else {
+            XCTFail("expected applied")
+        }
+    }
+
+    func testIdentClean() {
+        let source = FilterSource(path: "test.txt", mode: .toOdb)
+        let filter = IdentFilter()
+        let input = Data("Version: $Id: aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d $\n".utf8)
+        let result = filter.apply(input: input, source: source)
+        if case .applied(let data) = result {
+            XCTAssertEqual(data, Data("Version: $Id$\n".utf8))
+        } else {
+            XCTFail("expected applied")
+        }
+    }
+
+    func testIdentNoMarker() {
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let source = FilterSource(path: "test.txt", mode: .toWorktree, oid: oid)
+        let filter = IdentFilter()
+        let result = filter.apply(input: Data("no markers here\n".utf8), source: source)
+        if case .passthrough = result {} else {
+            XCTFail("expected passthrough")
+        }
+    }
+
+    func testBinaryDetection() {
+        XCTAssertTrue(isBinary(Data([0x68, 0x65, 0x6C, 0x00, 0x6F])))
+        XCTAssertFalse(isBinary(Data("hello world".utf8)))
+    }
+
+    func testBinarySkippedByCrlf() {
+        let source = FilterSource(path: "test.bin", mode: .toOdb)
+        let input = Data([0x68, 0x65, 0x6C, 0x0D, 0x0A, 0x00, 0x77])
+        let filter = CrlfFilter(autoCrlf: nil, coreEol: nil)
+        let result = filter.apply(input: input, source: source)
+        if case .passthrough = result {} else {
+            XCTFail("expected passthrough")
+        }
+    }
+
+    func testFilterListLoadTextFile() throws {
+        let tmp = NSTemporaryDirectory() + "test_filter_text_\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp)
+        let workdir = repo.workdir!
+
+        try "*.txt text\n".write(toFile: (workdir as NSString).appendingPathComponent(".gitattributes"),
+                                  atomically: true, encoding: .utf8)
+
+        let list = FilterList.load(gitDir: repo.gitDir, workdir: workdir, path: "hello.txt", mode: .toOdb)
+        XCTAssertTrue(list.contains("crlf"))
+    }
+
+    func testFilterListLoadBinaryFile() throws {
+        let tmp = NSTemporaryDirectory() + "test_filter_binary_\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp)
+        let workdir = repo.workdir!
+
+        try "*.bin binary\n".write(toFile: (workdir as NSString).appendingPathComponent(".gitattributes"),
+                                    atomically: true, encoding: .utf8)
+
+        let list = FilterList.load(gitDir: repo.gitDir, workdir: workdir, path: "image.bin", mode: .toOdb)
+        XCTAssertTrue(list.isEmpty)
+    }
+
+    func testFilterListLoadIdent() throws {
+        let tmp = NSTemporaryDirectory() + "test_filter_ident_\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp)
+        let workdir = repo.workdir!
+
+        try "*.c ident\n".write(toFile: (workdir as NSString).appendingPathComponent(".gitattributes"),
+                                 atomically: true, encoding: .utf8)
+
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let list = FilterList.load(gitDir: repo.gitDir, workdir: workdir, path: "main.c",
+                                   mode: .toWorktree, oid: oid)
+        XCTAssertTrue(list.contains("ident"))
+    }
+
+    func testFilterListApplyClean() throws {
+        let tmp = NSTemporaryDirectory() + "test_filter_apply_clean_\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp)
+        let workdir = repo.workdir!
+
+        try "*.txt text ident\n".write(toFile: (workdir as NSString).appendingPathComponent(".gitattributes"),
+                                        atomically: true, encoding: .utf8)
+
+        let list = FilterList.load(gitDir: repo.gitDir, workdir: workdir, path: "readme.txt", mode: .toOdb)
+        let input = Data("Version: $Id: abc123 $\r\nHello\r\n".utf8)
+        let output = list.apply(input)
+        XCTAssertEqual(output, Data("Version: $Id$\nHello\n".utf8))
+    }
+
+    func testFilterListApplySmudge() throws {
+        let tmp = NSTemporaryDirectory() + "test_filter_apply_smudge_\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp)
+        let workdir = repo.workdir!
+
+        try "*.txt text eol=crlf ident\n".write(toFile: (workdir as NSString).appendingPathComponent(".gitattributes"),
+                                                  atomically: true, encoding: .utf8)
+
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let list = FilterList.load(gitDir: repo.gitDir, workdir: workdir, path: "readme.txt",
+                                   mode: .toWorktree, oid: oid)
+        let input = Data("Version: $Id$\nHello\n".utf8)
+        let output = list.apply(input)
+        let s = String(data: output, encoding: .utf8)!
+        XCTAssertTrue(s.contains("$Id: aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d $"))
+        XCTAssertTrue(s.contains("\r\n"))
+    }
+
+    func testFilterEolLfAttribute() throws {
+        let tmp = NSTemporaryDirectory() + "test_filter_eol_lf_\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp)
+        let workdir = repo.workdir!
+
+        try "*.txt text eol=lf\n".write(toFile: (workdir as NSString).appendingPathComponent(".gitattributes"),
+                                         atomically: true, encoding: .utf8)
+
+        let list = FilterList.load(gitDir: repo.gitDir, workdir: workdir, path: "readme.txt", mode: .toWorktree)
+        XCTAssertFalse(list.contains("crlf"))
+    }
+
+    func testFilterAutoCrlfConfig() throws {
+        let tmp = NSTemporaryDirectory() + "test_filter_autocrlf_\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp)
+
+        try "[core]\n\tautocrlf = true\n".write(
+            toFile: (repo.gitDir as NSString).appendingPathComponent("config"),
+            atomically: true, encoding: .utf8)
+
+        let list = FilterList.load(gitDir: repo.gitDir, workdir: repo.workdir, path: "readme.txt", mode: .toOdb)
+        XCTAssertTrue(list.contains("crlf"))
+    }
+
+    func testFilterEmptyList() throws {
+        let tmp = NSTemporaryDirectory() + "test_filter_empty_\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        let repo = try Repository.create(at: tmp)
+
+        let list = FilterList.load(gitDir: repo.gitDir, workdir: repo.workdir, path: "test.txt", mode: .toOdb)
+        XCTAssertTrue(list.isEmpty)
+        XCTAssertEqual(list.count, 0)
+        XCTAssertEqual(list.apply(Data("hello world\n".utf8)), Data("hello world\n".utf8))
+    }
+
+    func testMultipleIdentMarkers() {
+        let input = Data("$Id$ and $Id$ again".utf8)
+        let oid = OID(hex: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d")
+        let result = identSmudge(input, oid: oid)
+        if case .applied(let data) = result {
+            let s = String(data: data, encoding: .utf8)!
+            let count = s.components(separatedBy: "$Id: aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d $").count - 1
+            XCTAssertEqual(count, 2)
+        } else {
+            XCTFail("expected applied")
+        }
+    }
+
+    func testIdentCleanMultiple() {
+        let input = Data("$Id: abc $ and $Id: def $".utf8)
+        let result = identClean(input)
+        if case .applied(let data) = result {
+            XCTAssertEqual(data, Data("$Id$ and $Id$".utf8))
+        } else {
+            XCTFail("expected applied")
+        }
+    }
+
     // MARK: - Pack Index Tests
 
     private func sortedTestOids() -> ([OID], [UInt32], [UInt64]) {
