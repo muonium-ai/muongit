@@ -129,6 +129,15 @@ public func parsePackIndex(_ data: [UInt8]) throws -> PackIndex {
 
 /// Build a pack index from components (for testing).
 func buildPackIndex(oids: [OID], crcs: [UInt32], offsets: [UInt64]) -> [UInt8] {
+    buildPackIndexWithChecksums(oids: oids, crcs: crcs, offsets: offsets, packChecksum: [UInt8](repeating: 0, count: 20))
+}
+
+func buildPackIndexWithChecksums(
+    oids: [OID],
+    crcs: [UInt32],
+    offsets: [UInt64],
+    packChecksum: [UInt8]
+) -> [UInt8] {
     var buf: [UInt8] = []
 
     buf.append(contentsOf: idxMagic)
@@ -154,12 +163,31 @@ func buildPackIndex(oids: [OID], crcs: [UInt32], offsets: [UInt64]) -> [UInt8] {
         buf.append(contentsOf: writePackU32(crc))
     }
 
+    var largeOffsets: [UInt64] = []
     for offset in offsets {
-        buf.append(contentsOf: writePackU32(UInt32(offset & 0xFFFFFFFF)))
+        if offset > 0x7FFF_FFFF {
+            let index = UInt32(largeOffsets.count)
+            buf.append(contentsOf: writePackU32(0x8000_0000 | index))
+            largeOffsets.append(offset)
+        } else {
+            buf.append(contentsOf: writePackU32(UInt32(offset & 0xFFFFFFFF)))
+        }
     }
 
-    buf.append(contentsOf: [UInt8](repeating: 0, count: 20)) // pack checksum
-    buf.append(contentsOf: [UInt8](repeating: 0, count: 20)) // index checksum
+    for offset in largeOffsets {
+        var value = offset
+        var encoded = [UInt8](repeating: 0, count: 8)
+        for idx in stride(from: 7, through: 0, by: -1) {
+            encoded[idx] = UInt8(value & 0xFF)
+            value >>= 8
+        }
+        buf.append(contentsOf: encoded)
+    }
+
+    buf.append(contentsOf: packChecksum)
+
+    let checksum = SHA1.hash(buf)
+    buf.append(contentsOf: checksum)
 
     return buf
 }

@@ -223,7 +223,12 @@ public final class Repository: Sendable {
 
     /// Clone a repository from a URL
     public static func clone(from url: String, to path: String) throws -> Repository {
-        fatalError("TODO: implement clone - requires network transport")
+        try cloneRepository(from: url, to: path)
+    }
+
+    /// Clone a repository from a URL using explicit clone options.
+    public static func clone(from url: String, to path: String, options: CloneOptions) throws -> Repository {
+        try cloneRepository(from: url, to: path, options: options)
     }
 
     /// Read HEAD reference

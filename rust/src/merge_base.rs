@@ -4,22 +4,13 @@
 use std::collections::{HashSet, VecDeque};
 use std::path::Path;
 
-use crate::commit::parse_commit;
 use crate::error::MuonGitError;
-use crate::odb::read_loose_object;
+use crate::object::read_object;
 use crate::oid::OID;
-use crate::types::ObjectType;
 
 /// Read and parse a commit from the object database.
 fn read_commit(git_dir: &Path, oid: &OID) -> Result<crate::commit::Commit, MuonGitError> {
-    let (obj_type, data) = read_loose_object(git_dir, oid)?;
-    if obj_type != ObjectType::Commit {
-        return Err(MuonGitError::InvalidObject(format!(
-            "expected commit, got {:?}",
-            obj_type
-        )));
-    }
-    parse_commit(oid.clone(), &data)
+    read_object(git_dir, oid)?.as_commit()
 }
 
 /// Collect all ancestors of a commit (including itself) via BFS.
@@ -135,6 +126,7 @@ pub fn merge_bases(git_dir: &Path, oid1: &OID, oid2: &OID) -> Result<Vec<OID>, M
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ObjectType;
     use crate::odb::write_loose_object;
     use crate::repository::Repository;
 

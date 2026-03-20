@@ -33,6 +33,7 @@ pub mod remote;
 pub mod pack_index;
 pub mod pack;
 pub mod transport;
+pub mod remote_transport;
 pub mod fetch;
 pub mod attributes;
 pub mod filter;

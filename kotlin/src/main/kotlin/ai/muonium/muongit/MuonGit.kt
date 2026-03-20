@@ -121,7 +121,12 @@ class Repository private constructor(
 
         /** Clone a repository from a URL */
         fun clone(url: String, path: String): Repository {
-            TODO("implement clone - requires network transport")
+            return cloneRepository(url, path)
+        }
+
+        /** Clone a repository from a URL using explicit clone options. */
+        fun clone(url: String, path: String, options: CloneOptions): Repository {
+            return cloneRepository(url, path, options)
         }
 
         private fun isGitDir(dir: java.io.File): Boolean =
