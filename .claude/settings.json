@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew test:*)",
+      "Bash(ls kotlin/build/test-results/test/*.xml)",
+      "Bash(./gradlew clean:*)",
+      "Bash(find kotlin/build -type f -name *.xml -o -name *.html)",
+      "Bash(\"$P\" tickets/mt/muontickets/muontickets/mt.py ls)",
+      "Bash(\"$P\" tickets/mt/muontickets/muontickets/mt.py new \"Add missing tests to Swift and Kotlin for parity with Rust\" --priority p1 --type tests --effort s --label swift --label kotlin --goal \"Add 8 missing tests to Swift and Kotlin so all three ports have identical test coverage\")",
+      "Bash(\"$P\" tickets/mt/muontickets/muontickets/mt.py claim T-000023 --owner agent-parity)",
+      "Bash(find /Users/senthil/github/muonium-ai/muongit/kotlin/build/test-results -name *.xml -exec cat {})",
+      "Bash(2)"
+    ]
+  }
+}
