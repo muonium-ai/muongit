@@ -4263,4 +4263,186 @@ class MuonGitTest {
             tmp.deleteRecursively()
         }
     }
+
+    // ---- Blame tests ----
+
+    @Test
+    fun testBlameSingleCommit() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_single_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree = makeTreeWithFile(gd, "file.txt", "line1\nline2\nline3")
+            val c = makeCommitWithTree(gd, tree, emptyList(), "initial")
+
+            writeReference(gd, "refs/heads/main", c)
+            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
+
+            val result = blameFile(gd, "file.txt")
+            assertEquals(3, result.lineCount)
+            assertEquals(1, result.hunkCount)
+            val hunk = result.hunkByIndex(0)!!
+            assertEquals(3, hunk.linesInHunk)
+            assertEquals(c, hunk.finalCommitId)
+            assertEquals(1, hunk.finalStartLineNumber)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testBlameTwoCommits() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_two_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree1 = makeTreeWithFile(gd, "file.txt", "line1\nline2")
+            val c1 = makeCommitWithTree(gd, tree1, emptyList(), "first")
+
+            val tree2 = makeTreeWithFile(gd, "file.txt", "line1\ninserted\nline2")
+            val c2 = makeCommitWithTree(gd, tree2, listOf(c1), "second")
+
+            writeReference(gd, "refs/heads/main", c2)
+            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
+
+            val result = blameFile(gd, "file.txt")
+            assertEquals(3, result.lineCount)
+
+            val h1 = result.hunkByLine(1)!!
+            assertEquals(c1, h1.finalCommitId)
+
+            val h2 = result.hunkByLine(2)!!
+            assertEquals(c2, h2.finalCommitId)
+
+            val h3 = result.hunkByLine(3)!!
+            assertEquals(c1, h3.finalCommitId)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testBlameLineRange() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_range_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree = makeTreeWithFile(gd, "file.txt", "a\nb\nc\nd\ne")
+            val c = makeCommitWithTree(gd, tree, emptyList(), "init")
+
+            writeReference(gd, "refs/heads/main", c)
+            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
+
+            val opts = BlameOptions(minLine = 2, maxLine = 4)
+            val result = blameFile(gd, "file.txt", opts)
+            assertEquals(5, result.lineCount)
+            val totalBlamed = result.hunks.sumOf { it.linesInHunk }
+            assertEquals(3, totalBlamed)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testBlameHunkByLine() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_hbl_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree = makeTreeWithFile(gd, "test.txt", "hello\nworld")
+            val c = makeCommitWithTree(gd, tree, emptyList(), "init")
+
+            writeReference(gd, "refs/heads/main", c)
+            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
+
+            val result = blameFile(gd, "test.txt")
+            assertNull(result.hunkByLine(0))
+            assertNotNull(result.hunkByLine(1))
+            assertNotNull(result.hunkByLine(2))
+            assertNull(result.hunkByLine(3))
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testBlameEmptyFile() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_empty_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree = makeTreeWithFile(gd, "empty.txt", "")
+            val c = makeCommitWithTree(gd, tree, emptyList(), "empty")
+
+            writeReference(gd, "refs/heads/main", c)
+            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
+
+            val result = blameFile(gd, "empty.txt")
+            assertEquals(0, result.lineCount)
+            assertEquals(0, result.hunkCount)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testBlameSubdirectory() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_subdir_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val blobOid = writeLooseObject(gd, ObjectType.BLOB, "nested content".toByteArray())
+            val innerEntry = TreeEntry(mode = FileMode.BLOB, name = "deep.txt", oid = blobOid)
+            val innerTreeData = serializeTree(listOf(innerEntry))
+            val innerTree = writeLooseObject(gd, ObjectType.TREE, innerTreeData)
+
+            val outerEntry = TreeEntry(mode = FileMode.TREE, name = "subdir", oid = innerTree)
+            val outerTreeData = serializeTree(listOf(outerEntry))
+            val outerTree = writeLooseObject(gd, ObjectType.TREE, outerTreeData)
+
+            val c = makeCommitWithTree(gd, outerTree, emptyList(), "nested")
+
+            writeReference(gd, "refs/heads/main", c)
+            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
+
+            val result = blameFile(gd, "subdir/deep.txt")
+            assertEquals(1, result.lineCount)
+            assertEquals(1, result.hunkCount)
+            assertEquals(c, result.hunks[0].finalCommitId)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testBlameFileNotFound() {
+        val tmp = java.io.File(System.getProperty("java.io.tmpdir"), "muongit_test_blame_nf_kt")
+        if (tmp.exists()) tmp.deleteRecursively()
+        try {
+            val repo = Repository.init(tmp.path)
+            val gd = repo.gitDir
+
+            val tree = makeTreeWithFile(gd, "exists.txt", "content")
+            val c = makeCommitWithTree(gd, tree, emptyList(), "init")
+
+            writeReference(gd, "refs/heads/main", c)
+            writeSymbolicReference(gd, "HEAD", "refs/heads/main")
+
+            assertFailsWith<MuonGitException.NotFound> { blameFile(gd, "nonexistent.txt") }
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
 }
