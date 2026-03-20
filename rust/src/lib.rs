@@ -8,6 +8,7 @@ pub mod sha1;
 pub mod sha256;
 pub mod repository;
 pub mod odb;
+pub mod object;
 pub mod refs;
 pub mod commit;
 pub mod tree;
@@ -40,6 +41,7 @@ pub mod worktree;
 pub use oid::OID;
 pub use types::{ObjectType, Signature};
 pub use error::MuonGitError;
+pub use object::GitObject;
 pub use repository::Repository;
 
 /// Library version information

@@ -18,11 +18,7 @@ public struct Blob: Sendable {
 
 /// Read a blob from the object database
 public func readBlob(gitDir: String, oid: OID) throws -> Blob {
-    let (objType, data) = try readLooseObject(gitDir: gitDir, oid: oid)
-    guard objType == .blob else {
-        throw MuonGitError.invalidObject("expected blob, got \(objType)")
-    }
-    return Blob(oid: oid, data: data)
+    return try readObject(gitDir: gitDir, oid: oid).asBlob()
 }
 
 // MARK: - Writing

@@ -14,11 +14,7 @@ data class Blob(
 
 /** Read a blob from the object database */
 fun readBlob(gitDir: java.io.File, oid: OID): Blob {
-    val (objType, data) = readLooseObject(gitDir, oid)
-    if (objType != ObjectType.BLOB) {
-        throw MuonGitException.InvalidObject("expected blob, got $objType")
-    }
-    return Blob(oid = oid, data = data)
+    return readObject(gitDir, oid).asBlob()
 }
 
 /** Write data as a blob to the object database, returns the OID */

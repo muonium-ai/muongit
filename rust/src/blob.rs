@@ -16,19 +16,7 @@ pub struct Blob {
 
 /// Read a blob from the object database
 pub fn read_blob(git_dir: &Path, oid: &OID) -> Result<Blob, MuonGitError> {
-    let (obj_type, data) = crate::odb::read_loose_object(git_dir, oid)?;
-    if obj_type != ObjectType::Blob {
-        return Err(MuonGitError::InvalidObject(format!(
-            "expected blob, got {:?}",
-            obj_type
-        )));
-    }
-    let size = data.len();
-    Ok(Blob {
-        oid: oid.clone(),
-        data,
-        size,
-    })
+    crate::object::read_object(git_dir, oid)?.as_blob()
 }
 
 /// Write data as a blob to the object database, returns the OID
