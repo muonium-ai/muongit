@@ -34,6 +34,12 @@ pub mod cherrypick;
 pub mod revert;
 pub mod rebase;
 pub mod stash;
+pub mod worktree;
+pub mod describe;
+pub mod notes;
+pub mod grafts;
+pub mod mailmap;
+pub mod pathspec;
 
 pub use oid::OID;
 pub use types::{ObjectType, Signature};
