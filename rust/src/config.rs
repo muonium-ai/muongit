@@ -20,6 +20,14 @@ impl Config {
         }
     }
 
+    /// Create an empty config tied to a file path.
+    pub fn with_path(path: &Path) -> Self {
+        Self {
+            entries: Vec::new(),
+            path: Some(path.to_path_buf()),
+        }
+    }
+
     /// Parse config from a string
     pub fn parse(content: &str) -> Self {
         Self {
