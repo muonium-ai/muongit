@@ -1,7 +1,7 @@
 //! Git describe — find the most recent tag reachable from a commit
 //! Parity: libgit2 src/libgit2/describe.c
 
-use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 
 use crate::commit::parse_commit;
@@ -102,7 +102,6 @@ impl DescribeResult {
 struct TagCandidate {
     name: String,
     priority: u8, // 2=annotated tag, 1=lightweight tag, 0=other ref
-    commit_oid: OID,
 }
 
 /// Describe a commit — find the most recent tag reachable from it
@@ -236,7 +235,6 @@ fn collect_candidates(
             TagCandidate {
                 name,
                 priority: actual_priority,
-                commit_oid,
             },
         );
     }
@@ -249,19 +247,13 @@ fn categorize_ref(refname: &str, opts: &DescribeOptions) -> Option<(String, u8)>
     match opts.strategy {
         DescribeStrategy::Default => {
             // Only annotated tags
-            if let Some(tag_name) = refname.strip_prefix("refs/tags/") {
-                Some((tag_name.to_string(), 2))
-            } else {
-                None
-            }
+            refname
+                .strip_prefix("refs/tags/")
+                .map(|tag_name| (tag_name.to_string(), 2))
         }
-        DescribeStrategy::Tags => {
-            if let Some(tag_name) = refname.strip_prefix("refs/tags/") {
-                Some((tag_name.to_string(), 1))
-            } else {
-                None
-            }
-        }
+        DescribeStrategy::Tags => refname
+            .strip_prefix("refs/tags/")
+            .map(|tag_name| (tag_name.to_string(), 1)),
         DescribeStrategy::All => {
             if let Some(tag_name) = refname.strip_prefix("refs/tags/") {
                 Some((tag_name.to_string(), 2))

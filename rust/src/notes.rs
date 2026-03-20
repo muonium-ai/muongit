@@ -1,15 +1,14 @@
 //! Git notes — metadata annotations on commits
 //! Parity: libgit2 src/libgit2/notes.c
 
-use std::fs;
 use std::path::Path;
 
 use crate::commit::parse_commit;
 use crate::error::MuonGitError;
-use crate::odb::{read_loose_object, write_loose_object};
+use crate::odb::read_loose_object;
 use crate::oid::OID;
-use crate::refs::{read_reference, resolve_reference, write_reference};
-use crate::tree::{parse_tree, serialize_tree, TreeEntry};
+use crate::refs::resolve_reference;
+use crate::tree::parse_tree;
 use crate::types::ObjectType;
 
 /// Default notes reference
@@ -95,11 +94,9 @@ fn find_note_in_tree(
         let rest = &target_hex[2..];
 
         for entry in &tree.entries {
-            if entry.name == prefix {
-                if entry.mode == 0o040000 {
-                    // Directory — recurse with remaining hex
-                    return find_note_in_tree(git_dir, &entry.oid, rest);
-                }
+            if entry.name == prefix && entry.mode == 0o040000 {
+                // Directory — recurse with remaining hex
+                return find_note_in_tree(git_dir, &entry.oid, rest);
             }
             // Direct blob match (full remaining hex)
             if entry.name == target_hex {
@@ -154,8 +151,13 @@ fn collect_notes_from_tree(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
     use crate::commit::serialize_commit;
+    use crate::odb::write_loose_object;
+    use crate::refs::write_reference;
     use crate::tree::serialize_tree;
+    use crate::tree::TreeEntry;
     use crate::types::Signature;
 
     fn test_sig() -> Signature {

@@ -15,7 +15,6 @@ pub struct PathspecFlags {
 struct PathspecPattern {
     pattern: String,
     negated: bool,
-    has_wildcard: bool,
     match_all: bool,
 }
 
@@ -132,12 +131,9 @@ fn parse_pattern(pat: &str) -> PathspecPattern {
     }
 
     let match_all = pattern == "*" || pattern.is_empty();
-    let has_wildcard = pattern.contains('*') || pattern.contains('?') || pattern.contains('[');
-
     PathspecPattern {
         pattern,
         negated,
-        has_wildcard,
         match_all,
     }
 }
@@ -183,8 +179,7 @@ fn path_matches_glob(path: &str, pattern: &str, ignore_case: bool) -> bool {
     };
 
     // Handle ** (any number of path levels)
-    if p.starts_with("**/") {
-        let sub = &p[3..];
+    if let Some(sub) = p.strip_prefix("**/") {
         // Match at any directory level
         if wildmatch(sub, &t) {
             return true;

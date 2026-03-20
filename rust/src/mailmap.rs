@@ -17,7 +17,7 @@ pub struct MailmapEntry {
 }
 
 /// A mailmap holding name/email mappings
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Mailmap {
     entries: Vec<MailmapEntry>,
 }
@@ -25,9 +25,7 @@ pub struct Mailmap {
 impl Mailmap {
     /// Create an empty mailmap
     pub fn new() -> Self {
-        Mailmap {
-            entries: Vec::new(),
-        }
+        Self::default()
     }
 
     /// Load mailmap from a file

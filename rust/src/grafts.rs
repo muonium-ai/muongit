@@ -16,7 +16,7 @@ pub struct Graft {
 }
 
 /// A collection of grafts loaded from .git/info/grafts or .git/shallow
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Grafts {
     entries: HashMap<String, Graft>,
 }
@@ -24,9 +24,7 @@ pub struct Grafts {
 impl Grafts {
     /// Create an empty grafts set
     pub fn new() -> Self {
-        Grafts {
-            entries: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Load grafts from a file (typically .git/info/grafts)
